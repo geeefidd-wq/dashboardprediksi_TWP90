@@ -1706,9 +1706,18 @@ elif selected_menu == "Prediksi TWP90":
     st.markdown('<div class="section-title" style="margin-top: 1rem;">Prediksi TWP90</div>', unsafe_allow_html=True)
     horizon = DASHBOARD_FORECAST_HORIZON
 
+    default_target_date = st.session_state.get(
+        "prediction_target_date_persisted",
+        to_date(available_target_months[0]),
+    )
+    default_target_date = max(
+        to_date(available_target_months[0]),
+        min(default_target_date, to_date(available_target_months[-1])),
+    )
+
     selected_target_date = st.date_input(
         "Pilih periode TWP90 yang ingin diprediksi",
-        value=to_date(available_target_months[0]),
+        value=default_target_date,
         min_value=to_date(available_target_months[0]),
         max_value=to_date(available_target_months[-1]),
         format="DD/MM/YYYY",
@@ -1718,6 +1727,7 @@ elif selected_menu == "Prediksi TWP90":
         ),
         key="selected_target_calendar",
     )
+    st.session_state["prediction_target_date_persisted"] = selected_target_date
     target_month = normalize_month_end(selected_target_date)
     if target_month < available_target_months[0] or target_month > available_target_months[-1]:
         st.error(
@@ -1775,6 +1785,27 @@ elif selected_menu == "Prediksi TWP90":
     editor_template = prepare_future_input_template(raw_history, future_months, exog_cols, percent_cols)
     current_signature = f"target_{target_month.strftime('%Y-%m')}_input_until_{input_month.strftime('%Y-%m')}_h{horizon}_n{len(future_months)}"
 
+    cached_prediction_input = pd.DataFrame()
+    cached_payload = st.session_state.get("prediction_payload")
+    if isinstance(cached_payload, dict) and cached_payload.get("signature") == current_signature:
+        cached_prediction_input = cached_payload.get("input_df", pd.DataFrame()).copy()
+    elif isinstance(st.session_state.get("prediction_input_cache"), dict):
+        cached_cache = st.session_state["prediction_input_cache"]
+        if cached_cache.get("signature") == current_signature:
+            cached_prediction_input = cached_cache.get("input_df", pd.DataFrame()).copy()
+
+    def cached_input_value(month_value, column_name, fallback=0.0):
+        if cached_prediction_input is None or cached_prediction_input.empty:
+            return float(fallback)
+        month_text = month_value.strftime("%Y-%m")
+        matched = cached_prediction_input[cached_prediction_input["Month"].astype(str) == month_text]
+        if matched.empty or column_name not in matched.columns:
+            return float(fallback)
+        value = pd.to_numeric(pd.Series([matched.iloc[0][column_name]]), errors="coerce").iloc[0]
+        if pd.isna(value):
+            return float(fallback)
+        return float(value)
+
     with st.form("prediction_form", clear_on_submit=False):
         input_rows = []
         for i, month in enumerate(future_months):
@@ -1796,7 +1827,7 @@ elif selected_menu == "Prediksi TWP90":
                 with twp_col_left:
                     row[TWP90_INPUT_COL] = st.number_input(
                         "TWP90 aktual bulan ini (%) *",
-                        value=0.0,
+                        value=cached_input_value(month, TWP90_INPUT_COL, 0.0),
                         step=0.01,
                         format="%.6f",
                         help="Isi nilai TWP90 aktual periode input dalam angka persen asli. Contoh: 4,32% ditulis 4.32.",
@@ -1818,6 +1849,7 @@ elif selected_menu == "Prediksi TWP90":
                     default_value = 0.0
                     if not template_row.empty and col in template_row.columns and pd.notna(template_row.iloc[0][col]):
                         default_value = float(template_row.iloc[0][col])
+                    default_value = cached_input_value(month, col, default_value)
                     with input_columns[j % 2]:
                         row[col] = st.number_input(
                             f"{make_display_name(col, percent_cols)} *",
@@ -1846,6 +1878,7 @@ elif selected_menu == "Prediksi TWP90":
             st.session_state["prediction_payload"] = {
                 "signature": current_signature,
                 "value_signature": current_value_signature,
+                "target_date": selected_target_date,
                 "input_df": input_df,
                 "result": result,
                 "internal_result": internal_result,
@@ -1855,6 +1888,13 @@ elif selected_menu == "Prediksi TWP90":
                 "feature_rows": feature_rows,
                 "raw_all": raw_all,
             }
+            st.session_state["prediction_input_cache"] = {
+                "signature": current_signature,
+                "value_signature": current_value_signature,
+                "target_date": selected_target_date,
+                "input_df": input_df.copy(),
+            }
+            st.session_state["prediction_target_date_persisted"] = selected_target_date
             st.success("Prediksi berhasil dihitung. Hasil dapat dilihat pada panel di bawah.")
         except Exception as e:
             st.session_state.pop("prediction_payload", None)
