@@ -856,11 +856,12 @@ def evaluation_metrics(eval_df):
 
 
 def prepare_prediction_input_evaluation_frame(payload):
-    """Membentuk data evaluasi dari hasil prediksi terbaru yang dihitung user.
+    """Membentuk tambahan data evaluasi dari hasil prediksi terbaru user.
 
-    Evaluasi hanya dihitung untuk baris yang memiliki dua nilai sekaligus:
-    TWP90 aktual input dan prediksi hybrid. Baris target yang belum punya TWP90
-    aktual otomatis tidak dihitung agar metrik tidak bias.
+    Data ini tidak menggantikan evaluasi historis. Baris dari user akan
+    ditambahkan ke data evaluasi history/artifact, lalu metrik dihitung ulang
+    dari seluruh observasi gabungan. Nilai Actual dan Predicted disimpan pada
+    skala original/desimal model agar konsisten dengan data history.
     """
     if not isinstance(payload, dict) or "result" not in payload:
         return pd.DataFrame()
@@ -869,32 +870,91 @@ def prepare_prediction_input_evaluation_frame(payload):
     if result is None or not isinstance(result, pd.DataFrame) or result.empty:
         return pd.DataFrame()
 
-    required_cols = {"Month", "Aktual_TWP90_Input_%", "Prediksi_TWP90_%"}
-    if not required_cols.issubset(set(result.columns)):
+    if "Month" not in result.columns:
         return pd.DataFrame()
 
-    out = result[["Month", "Aktual_TWP90_Input_%", "Prediksi_TWP90_%"]].copy()
-    out["Actual"] = pd.to_numeric(out["Aktual_TWP90_Input_%"], errors="coerce")
-    out["Predicted"] = pd.to_numeric(out["Prediksi_TWP90_%"], errors="coerce")
-    out = out.dropna(subset=["Actual", "Predicted"])
+    out = pd.DataFrame()
+    out["Month"] = pd.to_datetime(result["Month"], errors="coerce").dt.to_period("M").dt.to_timestamp("M")
 
+    # Utamakan kolom original/desimal. Jika tidak ada, fallback dari kolom persen dibagi 100.
+    if {"Aktual_TWP90_Input_Original", "Prediksi_Hybrid_Original"}.issubset(set(result.columns)):
+        out["Actual"] = pd.to_numeric(result["Aktual_TWP90_Input_Original"], errors="coerce")
+        out["Predicted"] = pd.to_numeric(result["Prediksi_Hybrid_Original"], errors="coerce")
+    elif {"Aktual_TWP90_Input_%", "Prediksi_TWP90_%"}.issubset(set(result.columns)):
+        out["Actual"] = pd.to_numeric(result["Aktual_TWP90_Input_%"], errors="coerce") / 100.0
+        out["Predicted"] = pd.to_numeric(result["Prediksi_TWP90_%"], errors="coerce") / 100.0
+    else:
+        return pd.DataFrame()
+
+    # Baris target yang belum punya TWP90 aktual tidak dihitung dalam evaluasi.
+    out = out.dropna(subset=["Month", "Actual", "Predicted"])
     if out.empty:
         return pd.DataFrame()
 
     out = out[["Month", "Actual", "Predicted"]].copy()
-    out["Source"] = "Hasil prediksi input user"
+    out["Source"] = "Input user"
     return out
 
 
-def get_active_evaluation_dataset(default_eval_raw):
-    """Prioritaskan evaluasi dari prediksi user, lalu fallback ke file evaluasi historis."""
-    user_eval_raw = prepare_prediction_input_evaluation_frame(st.session_state.get("prediction_payload"))
-    if not user_eval_raw.empty:
-        summary, detail, scale = evaluation_metrics(user_eval_raw)
-        return summary, detail, scale, "user_prediction"
+def combine_history_and_user_evaluation(default_eval_raw, user_eval_raw):
+    """Gabungkan evaluasi historis dengan tambahan observasi dari input user."""
+    frames = []
 
-    summary, detail, scale = evaluation_metrics(default_eval_raw)
-    return summary, detail, scale, "artifact_history"
+    if default_eval_raw is not None and isinstance(default_eval_raw, pd.DataFrame) and not default_eval_raw.empty:
+        history_part = default_eval_raw.copy()
+        if "Source" not in history_part.columns:
+            history_part["Source"] = "History/artifact"
+        else:
+            history_part["Source"] = history_part["Source"].fillna("History/artifact")
+        history_part["Eval_Order"] = 0
+        frames.append(history_part)
+
+    if user_eval_raw is not None and isinstance(user_eval_raw, pd.DataFrame) and not user_eval_raw.empty:
+        user_part = user_eval_raw.copy()
+        user_part["Source"] = "Input user"
+        user_part["Eval_Order"] = 1
+        frames.append(user_part)
+
+    if not frames:
+        return pd.DataFrame()
+
+    combined = pd.concat(frames, axis=0, ignore_index=True, sort=False)
+    combined["Actual"] = pd.to_numeric(combined["Actual"], errors="coerce")
+    combined["Predicted"] = pd.to_numeric(combined["Predicted"], errors="coerce")
+    combined = combined.dropna(subset=["Actual", "Predicted"]).copy()
+
+    if "Month" in combined.columns:
+        combined["Month"] = pd.to_datetime(combined["Month"], errors="coerce").dt.to_period("M").dt.to_timestamp("M")
+        combined = combined.sort_values(["Month", "Eval_Order"]).copy()
+        # Jika periode yang sama ada pada history dan input user, pakai input user sebagai data terbaru.
+        combined = combined.drop_duplicates(subset=["Month"], keep="last")
+    else:
+        combined = combined.sort_values("Eval_Order").copy()
+
+    combined = combined.drop(columns=["Eval_Order"], errors="ignore")
+    return combined
+
+
+def get_active_evaluation_dataset(default_eval_raw):
+    """Hitung evaluasi dari data history ditambah data input user terbaru."""
+    user_eval_raw = prepare_prediction_input_evaluation_frame(st.session_state.get("prediction_payload"))
+    combined_eval_raw = combine_history_and_user_evaluation(default_eval_raw, user_eval_raw)
+
+    if not combined_eval_raw.empty:
+        summary, detail, scale = evaluation_metrics(combined_eval_raw)
+        history_n = 0 if default_eval_raw is None or default_eval_raw.empty else len(default_eval_raw.dropna(subset=["Actual", "Predicted"]))
+        user_n = 0 if user_eval_raw is None or user_eval_raw.empty else len(user_eval_raw.dropna(subset=["Actual", "Predicted"]))
+
+        if user_n > 0 and history_n > 0:
+            summary["Source"] = f"History + input user ({history_n} + {user_n} observasi)"
+            return summary, detail, scale, "history_plus_user"
+        if user_n > 0:
+            summary["Source"] = f"Input user ({user_n} observasi)"
+            return summary, detail, scale, "user_prediction"
+        summary["Source"] = summary.get("Source", "History/artifact")
+        return summary, detail, scale, "artifact_history"
+
+    return {}, pd.DataFrame(), 100.0, "no_data"
 
 
 def value_card(label, value, note="", accent="#1d4ed8"):
@@ -1557,7 +1617,7 @@ if selected_menu != "Evaluasi Model":
     with summary_col2:
         st.markdown(value_card("TWP90 asli terakhir", f"{last_actual_pct:.2f}%", f"Periode {last_observed.strftime('%B %Y')}", "#0ea5e9"), unsafe_allow_html=True)
     with summary_col3:
-        eval_note = eval_summary.get("Source", "Data evaluasi belum tersedia") if eval_summary else "Data evaluasi belum tersedia"
+        eval_note = active_eval_summary.get("Source", "Data evaluasi belum tersedia") if active_eval_summary else "Data evaluasi belum tersedia"
         st.markdown(value_card("Evaluasi MAPE", mape_text, eval_note, "#2563eb"), unsafe_allow_html=True)
     with summary_col4:
         st.markdown(value_card("Data historis", f"{len(raw_history):,} bulan", f"Sampai {last_observed.strftime('%B %Y')}", "#1e3a8a"), unsafe_allow_html=True)
@@ -1627,12 +1687,22 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
         )
         return
 
-    if source_mode == "user_prediction":
+    if source_mode == "history_plus_user":
         st.markdown(
             """
             <div class="info-box">
-                Evaluasi ini dihitung dari <b>hasil prediksi terbaru yang diinput/dihitung user</b> pada menu Prediksi TWP90.
-                Baris yang belum memiliki TWP90 aktual tidak dihitung agar MAE, RMSE, MAPE, dan R² tetap valid.
+                Evaluasi ini dihitung dari <b>data evaluasi historis</b> yang digabung dengan <b>tambahan data aktual-prediksi dari input user terbaru</b>.
+                Jadi nilai history tetap masuk perhitungan, lalu observasi baru dari user ikut menambah MAE, RMSE, MAPE, dan R².
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    elif source_mode == "user_prediction":
+        st.markdown(
+            """
+            <div class="info-box">
+                Evaluasi ini dihitung dari <b>hasil prediksi terbaru yang diinput/dihitung user</b>.
+                Data historis belum tersedia, sehingga metrik hanya memakai observasi user yang memiliki TWP90 aktual dan prediksi.
             </div>
             """,
             unsafe_allow_html=True,
@@ -1641,7 +1711,7 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
         st.markdown(
             """
             <div class="info-box">
-                Evaluasi ini dihitung dari data evaluasi historis/artifact model. Setelah user menghitung prediksi baru pada menu Prediksi TWP90 dan tersedia TWP90 aktual input, panel ini otomatis memakai hasil prediksi tersebut.
+                Evaluasi ini dihitung dari data evaluasi historis/artifact model. Setelah user menghitung prediksi baru pada menu Prediksi TWP90, observasi input user akan <b>ditambahkan</b> ke data historis, bukan menggantikan history.
             </div>
             """,
             unsafe_allow_html=True,
@@ -1698,9 +1768,10 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
     eval_table = eval_plot.copy()
     if "Month" in eval_table.columns and pd.api.types.is_datetime64_any_dtype(eval_table["Month"]):
         eval_table["Month"] = eval_table["Month"].dt.strftime("%Y-%m")
-    eval_table = eval_table[[c for c in ["Month", "Actual_%", "Predicted_%", "Error_pp", "Abs_Error_pp"] if c in eval_table.columns]].copy()
+    eval_table = eval_table[[c for c in ["Month", "Source", "Actual_%", "Predicted_%", "Error_pp", "Abs_Error_pp"] if c in eval_table.columns]].copy()
     eval_table = eval_table.rename(columns={
         "Month": "Periode",
+        "Source": "Sumber Data",
         "Actual_%": "TWP90 Aktual (%)",
         "Predicted_%": "Prediksi Hybrid (%)",
         "Error_pp": "Selisih (pp)",
