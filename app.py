@@ -1583,11 +1583,11 @@ def show_eval_panel():
 
     e1, e2, e3, e4, e5 = st.columns(5)
     with e1:
-        st.markdown(value_card("MAE", f"{eval_summary['MAE_pp']:.3f} pp", "Rata-rata galat absolut"), unsafe_allow_html=True)
+        st.markdown(value_card("MAE", f"{eval_summary['MAE_pp']:.3f} pp", "Rata-rata selisih absolut"), unsafe_allow_html=True)
     with e2:
-        st.markdown(value_card("RMSE", f"{eval_summary['RMSE_pp']:.3f} pp", "Galat besar lebih dihukum"), unsafe_allow_html=True)
+        st.markdown(value_card("RMSE", f"{eval_summary['RMSE_pp']:.3f} pp", "Rata-rata kuadrat kesalahan antara nilai prediksi dan aktual"), unsafe_allow_html=True)
     with e3:
-        st.markdown(value_card("MAPE", mape_text, "Persentase galat relatif"), unsafe_allow_html=True)
+        st.markdown(value_card("MAPE", mape_text, "Persentase rata-rata kesalahan absolut"), unsafe_allow_html=True)
     with e4:
         r2_val = "-" if pd.isna(eval_summary["R2"]) else f"{eval_summary['R2']:.3f}"
         st.markdown(value_card("R²", r2_val, "Kecocokan aktual-prediksi"), unsafe_allow_html=True)
