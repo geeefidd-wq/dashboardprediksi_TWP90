@@ -1583,11 +1583,11 @@ def show_eval_panel():
 
     e1, e2, e3, e4, e5 = st.columns(5)
     with e1:
-        st.markdown(value_card("MAE", f"{eval_summary['MAE_pp']:.3f} pp", "Rata-rata galat absolut"), unsafe_allow_html=True)
+        st.markdown(value_card("MAE", f"{eval_summary['MAE_pp']:.3f} pp", "Rata-rata selisih mutlak antara nilai prediksi dan aktual"), unsafe_allow_html=True)
     with e2:
-        st.markdown(value_card("RMSE", f"{eval_summary['RMSE_pp']:.3f} pp", "Galat besar lebih dihukum"), unsafe_allow_html=True)
+        st.markdown(value_card("RMSE", f"{eval_summary['RMSE_pp']:.3f} pp", "Rata-rata kuadrat selisih antara nilai prediksi dan aktual"), unsafe_allow_html=True)
     with e3:
-        st.markdown(value_card("MAPE", mape_text, "Persentase galat relatif"), unsafe_allow_html=True)
+        st.markdown(value_card("MAPE", mape_text, "Persentase rata-rata kesalahan absolut"), unsafe_allow_html=True)
     with e4:
         r2_val = "-" if pd.isna(eval_summary["R2"]) else f"{eval_summary['R2']:.3f}"
         st.markdown(value_card("R²", r2_val, "Kecocokan aktual-prediksi"), unsafe_allow_html=True)
@@ -1801,15 +1801,6 @@ elif selected_menu == "Prediksi TWP90":
                         format="%.6f",
                         help="Isi nilai TWP90 aktual periode input dalam angka persen asli. Contoh: 4,32% ditulis 4.32.",
                         key=f"num_{current_signature}_{month_key}_{TWP90_INPUT_COL}",
-                    )
-                with twp_col_right:
-                    st.markdown(
-                        """
-                        <div class="info-box" style="padding:11px 13px; margin-top:3px;">
-                            Nilai ini tidak menjadi output target bulan yang sama, tetapi dipakai untuk update residual dan state model sebelum menghitung bulan berikutnya.
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
                     )
 
                 input_columns = st.columns(2)
@@ -2100,7 +2091,5 @@ elif selected_menu == "Prediksi TWP90":
 
 elif selected_menu == "Evaluasi Model":
     st.markdown('<div class="section-title" style="margin-top: 1rem;">Evaluasi Model</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-help">Panel ini menampilkan evaluasi aktual vs prediksi, error, absolute error, dan feature importance model hybrid.</div>', unsafe_allow_html=True)
-    show_eval_panel()
     st.markdown('<div class="feature-importance-spacer"></div>', unsafe_allow_html=True)
     show_hybrid_feature_importance()
