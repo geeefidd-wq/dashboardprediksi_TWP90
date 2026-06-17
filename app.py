@@ -1245,11 +1245,6 @@ def get_hybrid_feature_importance(artifacts, cfg, top_n=20):
 def show_hybrid_feature_importance():
     importance_df = get_hybrid_feature_importance(artifacts, cfg, top_n=20)
     st.markdown('<div class="section-title">Feature Importance Model Hybrid</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="section-help">Grafik ini membaca feature importance dari komponen <b>XGBoost residual</b> pada model hybrid SARIMAX + XGBoost. Nilainya dinormalisasi menjadi persentase agar lebih mudah dibandingkan.</div>',
-        unsafe_allow_html=True,
-    )
-
     if importance_df.empty:
         st.markdown(
             """
@@ -1278,7 +1273,7 @@ def show_hybrid_feature_importance():
         font=dict(color="#0f2a5f"),
         xaxis_title="Importance (%)",
         yaxis_title="Fitur",
-        margin=dict(l=20, r=70, t=70, b=30),
+        margin=dict(l=20, r=70, t=28, b=30),
     )
     fig_importance.update_xaxes(range=[0, max(importance_df["Importance_%"].max() * 1.18, 1)])
     st.plotly_chart(fig_importance, use_container_width=True, config={"displayModeBar": False, "responsive": True})
@@ -1476,7 +1471,7 @@ st.markdown(
 .component-value {font-size:19px; color:#0f2a5f; font-weight:950; margin-top:4px;}
 .modern-table-title {font-size:15px; font-weight:950; color:#0f2a5f; margin:14px 0 8px;}
 .eval-table-title {font-size:24px; font-weight:1000; color:#0f2a5f; margin:26px 0 12px; letter-spacing:-.025em;}
-.feature-importance-spacer {height:46px;}
+.feature-importance-spacer {height:10px;}
 .table-note {font-size:12.5px; color:#64748b; line-height:1.55; margin:-2px 0 12px 0;}
 div.stButton > button, div.stDownloadButton > button, div.stFormSubmitButton > button {
     border-radius:16px !important; border:0 !important; min-height:48px !important; font-weight:900 !important;
@@ -1686,36 +1681,6 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
             unsafe_allow_html=True,
         )
         return
-
-    if source_mode == "history_plus_user":
-        st.markdown(
-            """
-            <div class="info-box">
-                Evaluasi ini dihitung dari <b>data evaluasi historis</b> yang digabung dengan <b>tambahan data aktual-prediksi dari input user terbaru</b>.
-                Jadi nilai history tetap masuk perhitungan, lalu observasi baru dari user ikut menambah MAE, RMSE, MAPE, dan R².
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    elif source_mode == "user_prediction":
-        st.markdown(
-            """
-            <div class="info-box">
-                Evaluasi ini dihitung dari <b>hasil prediksi terbaru yang diinput/dihitung user</b>.
-                Data historis belum tersedia, sehingga metrik hanya memakai observasi user yang memiliki TWP90 aktual dan prediksi.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            """
-            <div class="info-box">
-                Evaluasi ini dihitung dari data evaluasi historis/artifact model. Setelah user menghitung prediksi baru pada menu Prediksi TWP90, observasi input user akan <b>ditambahkan</b> ke data historis, bukan menggantikan history.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
 
     current_mape = summary.get("MAPE_%")
     current_mape_text = "-" if pd.isna(current_mape) else f"{current_mape:.2f}%"
@@ -1963,25 +1928,14 @@ elif selected_menu == "Prediksi TWP90":
                     unsafe_allow_html=True,
                 )
                 row = {"Month": month.strftime("%Y-%m")}
-                twp_col_left, twp_col_right = st.columns([1, 1])
-                with twp_col_left:
-                    row[TWP90_INPUT_COL] = st.number_input(
-                        "TWP90 aktual bulan ini (%) *",
-                        value=cached_input_value(month, TWP90_INPUT_COL, 0.0),
-                        step=0.01,
-                        format="%.6f",
-                        help="Isi nilai TWP90 aktual periode input dalam angka persen asli. Contoh: 4,32% ditulis 4.32.",
-                        key=f"num_{current_signature}_{month_key}_{TWP90_INPUT_COL}",
-                    )
-                with twp_col_right:
-                    st.markdown(
-                        """
-                        <div class="info-box" style="padding:11px 13px; margin-top:3px;">
-                            Nilai ini tidak menjadi output target bulan yang sama, tetapi dipakai untuk update residual dan state model sebelum menghitung bulan berikutnya.
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
+                row[TWP90_INPUT_COL] = st.number_input(
+                    "TWP90 aktual bulan ini (%) *",
+                    value=cached_input_value(month, TWP90_INPUT_COL, 0.0),
+                    step=0.01,
+                    format="%.6f",
+                    help="Isi nilai TWP90 aktual periode input dalam angka persen asli. Contoh: 4,32% ditulis 4.32.",
+                    key=f"num_{current_signature}_{month_key}_{TWP90_INPUT_COL}",
+                )
 
                 input_columns = st.columns(2)
                 template_row = editor_template.loc[editor_template["Month"] == month.strftime("%Y-%m")]
@@ -2280,8 +2234,6 @@ elif selected_menu == "Prediksi TWP90":
 
 elif selected_menu == "Evaluasi Model":
     st.markdown('<div class="section-title" style="margin-top: 1rem;">Evaluasi Model</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-help">Panel ini menampilkan evaluasi aktual vs prediksi, error, absolute error, dan feature importance model hybrid.</div>', unsafe_allow_html=True)
-
     eval_view_mode = st.selectbox(
         "Pilih tampilan evaluasi",
         [
@@ -2298,13 +2250,5 @@ elif selected_menu == "Evaluasi Model":
     if eval_view_mode == "Evaluasi Aktual vs Prediksi":
         show_eval_panel(active_eval_summary, active_eval_detail, active_eval_source)
     else:
-        st.markdown(
-            """
-            <div class="info-box">
-                Grafik ini memakai artifact model yang sama dengan evaluasi. Perubahan pilihan di sini hanya mengatur tampilan, bukan mengubah logika perhitungan evaluasi, history, atau input user.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
         st.markdown('<div class="feature-importance-spacer"></div>', unsafe_allow_html=True)
         show_hybrid_feature_importance()
