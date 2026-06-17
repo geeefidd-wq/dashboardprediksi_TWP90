@@ -855,6 +855,48 @@ def evaluation_metrics(eval_df):
     }, df, scale
 
 
+def prepare_prediction_input_evaluation_frame(payload):
+    """Membentuk data evaluasi dari hasil prediksi terbaru yang dihitung user.
+
+    Evaluasi hanya dihitung untuk baris yang memiliki dua nilai sekaligus:
+    TWP90 aktual input dan prediksi hybrid. Baris target yang belum punya TWP90
+    aktual otomatis tidak dihitung agar metrik tidak bias.
+    """
+    if not isinstance(payload, dict) or "result" not in payload:
+        return pd.DataFrame()
+
+    result = payload.get("result")
+    if result is None or not isinstance(result, pd.DataFrame) or result.empty:
+        return pd.DataFrame()
+
+    required_cols = {"Month", "Aktual_TWP90_Input_%", "Prediksi_TWP90_%"}
+    if not required_cols.issubset(set(result.columns)):
+        return pd.DataFrame()
+
+    out = result[["Month", "Aktual_TWP90_Input_%", "Prediksi_TWP90_%"]].copy()
+    out["Actual"] = pd.to_numeric(out["Aktual_TWP90_Input_%"], errors="coerce")
+    out["Predicted"] = pd.to_numeric(out["Prediksi_TWP90_%"], errors="coerce")
+    out = out.dropna(subset=["Actual", "Predicted"])
+
+    if out.empty:
+        return pd.DataFrame()
+
+    out = out[["Month", "Actual", "Predicted"]].copy()
+    out["Source"] = "Hasil prediksi input user"
+    return out
+
+
+def get_active_evaluation_dataset(default_eval_raw):
+    """Prioritaskan evaluasi dari prediksi user, lalu fallback ke file evaluasi historis."""
+    user_eval_raw = prepare_prediction_input_evaluation_frame(st.session_state.get("prediction_payload"))
+    if not user_eval_raw.empty:
+        summary, detail, scale = evaluation_metrics(user_eval_raw)
+        return summary, detail, scale, "user_prediction"
+
+    summary, detail, scale = evaluation_metrics(default_eval_raw)
+    return summary, detail, scale, "artifact_history"
+
+
 def value_card(label, value, note="", accent="#1d4ed8"):
     return f"""
     <div class="value-card" style="border-top:4px solid {accent};">
@@ -1236,7 +1278,8 @@ if not history.empty and "Prediksi_Hybrid_Original" in history.columns:
         latest_history_pred_pct = to_percent_display(pred_hist["Prediksi_Hybrid_Original"].iloc[-1])
         latest_history_pred_month = pred_hist["Month"].iloc[-1]
 
-mape_value = eval_summary.get("MAPE_%") if eval_summary else np.nan
+active_eval_summary, active_eval_detail, active_eval_scale, active_eval_source = get_active_evaluation_dataset(eval_raw)
+mape_value = active_eval_summary.get("MAPE_%") if active_eval_summary else np.nan
 mape_text = "-" if pd.isna(mape_value) else f"{mape_value:.2f}%"
 RISK_ORANGE, RISK_RED = get_risk_thresholds(cfg, artifacts)
 RISK_ORANGE_PCT = RISK_ORANGE * 100
@@ -1569,32 +1612,58 @@ def show_historical_chart():
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})
 
 
-def show_eval_panel():
-    if not eval_summary or eval_detail.empty:
+def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
+    summary = summary if summary is not None else eval_summary
+    detail = detail if detail is not None else eval_detail
+
+    if not summary or detail is None or detail.empty:
         st.markdown(
             """
             <div class="info-box">
-                Data evaluasi belum tersedia. Letakkan <b>test_predictions_hybrid.csv</b> atau <b>dashboard_twp90_history.csv</b> di folder <b>model_artifacts</b> dengan kolom aktual dan prediksi agar panel evaluasi muncul otomatis.
+                Data evaluasi belum tersedia. Jika ingin evaluasi otomatis dari input user, buka menu <b>Prediksi TWP90</b>, isi seluruh input, lalu klik <b>Hitung Prediksi</b>. Jika ingin evaluasi historis, letakkan <b>test_predictions_hybrid.csv</b> atau <b>dashboard_twp90_history.csv</b> di folder <b>model_artifacts</b> dengan kolom aktual dan prediksi.
             </div>
             """,
             unsafe_allow_html=True,
         )
         return
 
+    if source_mode == "user_prediction":
+        st.markdown(
+            """
+            <div class="info-box">
+                Evaluasi ini dihitung dari <b>hasil prediksi terbaru yang diinput/dihitung user</b> pada menu Prediksi TWP90.
+                Baris yang belum memiliki TWP90 aktual tidak dihitung agar MAE, RMSE, MAPE, dan R² tetap valid.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            """
+            <div class="info-box">
+                Evaluasi ini dihitung dari data evaluasi historis/artifact model. Setelah user menghitung prediksi baru pada menu Prediksi TWP90 dan tersedia TWP90 aktual input, panel ini otomatis memakai hasil prediksi tersebut.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    current_mape = summary.get("MAPE_%")
+    current_mape_text = "-" if pd.isna(current_mape) else f"{current_mape:.2f}%"
+
     e1, e2, e3, e4, e5 = st.columns(5)
     with e1:
-        st.markdown(value_card("MAE", f"{eval_summary['MAE_pp']:.3f} pp", "Rata-rata selisih absolut"), unsafe_allow_html=True)
+        st.markdown(value_card("MAE", f"{summary['MAE_pp']:.3f} pp", "Rata-rata selisih absolut"), unsafe_allow_html=True)
     with e2:
-        st.markdown(value_card("RMSE", f"{eval_summary['RMSE_pp']:.3f} pp", "Rata-rata kuadrat kesalahan antara nilai prediksi dan aktual"), unsafe_allow_html=True)
+        st.markdown(value_card("RMSE", f"{summary['RMSE_pp']:.3f} pp", "Rata-rata kuadrat kesalahan antara nilai prediksi dan aktual"), unsafe_allow_html=True)
     with e3:
-        st.markdown(value_card("MAPE", mape_text, "Persentase rata-rata kesalahan absolut"), unsafe_allow_html=True)
+        st.markdown(value_card("MAPE", current_mape_text, "Persentase rata-rata kesalahan absolut"), unsafe_allow_html=True)
     with e4:
-        r2_val = "-" if pd.isna(eval_summary["R2"]) else f"{eval_summary['R2']:.3f}"
+        r2_val = "-" if pd.isna(summary["R2"]) else f"{summary['R2']:.3f}"
         st.markdown(value_card("R²", r2_val, "Kecocokan aktual-prediksi"), unsafe_allow_html=True)
     with e5:
-        st.markdown(value_card("Observasi", f"{eval_summary['N']}", eval_summary["Source"]), unsafe_allow_html=True)
+        st.markdown(value_card("Observasi", f"{summary['N']}", summary["Source"]), unsafe_allow_html=True)
 
-    eval_plot = eval_detail.copy()
+    eval_plot = detail.copy()
     fig_eval = go.Figure()
     fig_eval.add_trace(go.Scatter(
         x=eval_plot["Month"] if "Month" in eval_plot.columns else eval_plot.index,
@@ -1643,7 +1712,6 @@ def show_eval_panel():
         )
 
     st.markdown('<div class="eval-table-title">Tabel Detail Evaluasi Aktual vs Prediksi</div>', unsafe_allow_html=True)
-    # Caption setelah tabel detail pada menu evaluasi telah dihapus sesuai permintaan
     eval_table = clean_undefined_strings(eval_table)
     render_modern_blue_table(
         eval_table,
@@ -2141,6 +2209,7 @@ elif selected_menu == "Prediksi TWP90":
 elif selected_menu == "Evaluasi Model":
     st.markdown('<div class="section-title" style="margin-top: 1rem;">Evaluasi Model</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-help">Panel ini menampilkan evaluasi aktual vs prediksi, error, absolute error, dan feature importance model hybrid.</div>', unsafe_allow_html=True)
-    show_eval_panel()
+    active_eval_summary, active_eval_detail, active_eval_scale, active_eval_source = get_active_evaluation_dataset(eval_raw)
+    show_eval_panel(active_eval_summary, active_eval_detail, active_eval_source)
     st.markdown('<div class="feature-importance-spacer"></div>', unsafe_allow_html=True)
     show_hybrid_feature_importance()
