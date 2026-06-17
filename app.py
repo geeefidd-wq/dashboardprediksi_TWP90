@@ -1768,10 +1768,11 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
     eval_table = eval_plot.copy()
     if "Month" in eval_table.columns and pd.api.types.is_datetime64_any_dtype(eval_table["Month"]):
         eval_table["Month"] = eval_table["Month"].dt.strftime("%Y-%m")
-    eval_table = eval_table[[c for c in ["Month", "Source", "Actual_%", "Predicted_%", "Error_pp", "Abs_Error_pp"] if c in eval_table.columns]].copy()
+    # Source tetap ada di eval_plot/detail untuk logika evaluasi dan penggabungan data,
+    # tetapi tidak ditampilkan pada tabel agar tampilan lebih bersih.
+    eval_table = eval_table[[c for c in ["Month", "Actual_%", "Predicted_%", "Error_pp", "Abs_Error_pp"] if c in eval_table.columns]].copy()
     eval_table = eval_table.rename(columns={
         "Month": "Periode",
-        "Source": "Sumber Data",
         "Actual_%": "TWP90 Aktual (%)",
         "Predicted_%": "Prediksi Hybrid (%)",
         "Error_pp": "Selisih (pp)",
@@ -2280,7 +2281,30 @@ elif selected_menu == "Prediksi TWP90":
 elif selected_menu == "Evaluasi Model":
     st.markdown('<div class="section-title" style="margin-top: 1rem;">Evaluasi Model</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-help">Panel ini menampilkan evaluasi aktual vs prediksi, error, absolute error, dan feature importance model hybrid.</div>', unsafe_allow_html=True)
+
+    eval_view_mode = st.selectbox(
+        "Pilih tampilan evaluasi",
+        [
+            "Evaluasi Aktual vs Prediksi",
+            "Feature Importance Model Hybrid",
+        ],
+        index=0,
+        key="evaluation_view_mode",
+        help="Feature Importance tidak langsung ditampilkan. Pilih opsi Feature Importance jika ingin melihat grafik kontribusi fitur XGBoost residual.",
+    )
+
     active_eval_summary, active_eval_detail, active_eval_scale, active_eval_source = get_active_evaluation_dataset(eval_raw)
-    show_eval_panel(active_eval_summary, active_eval_detail, active_eval_source)
-    st.markdown('<div class="feature-importance-spacer"></div>', unsafe_allow_html=True)
-    show_hybrid_feature_importance()
+
+    if eval_view_mode == "Evaluasi Aktual vs Prediksi":
+        show_eval_panel(active_eval_summary, active_eval_detail, active_eval_source)
+    else:
+        st.markdown(
+            """
+            <div class="info-box">
+                Grafik ini memakai artifact model yang sama dengan evaluasi. Perubahan pilihan di sini hanya mengatur tampilan, bukan mengubah logika perhitungan evaluasi, history, atau input user.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="feature-importance-spacer"></div>', unsafe_allow_html=True)
+        show_hybrid_feature_importance()
