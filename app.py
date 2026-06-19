@@ -1311,10 +1311,47 @@ last_observed = normalize_month_end(cfg.get("last_observed_month", raw_history.i
 next_month = (last_observed.to_period("M") + 1).to_timestamp("M")
 DASHBOARD_FORECAST_HORIZON = get_forecast_horizon(cfg, artifacts)
 target_output_month = (next_month.to_period("M") + DASHBOARD_FORECAST_HORIZON).to_timestamp("M")
+
+# Batas kalender prediksi dibuat berbasis tahun, bukan hanya 12 bulan setelah data terakhir.
+# Default lama `dashboard_max_selectable_months = 12` membuat pilihan target berhenti di 2026
+# ketika data historis terakhir adalah Desember 2025. Dengan blok ini, user bisa memilih
+# periode lintas tahun. Ubah `dashboard_max_target_year` di preprocessing_config.json
+# jika ingin menentukan tahun maksimum secara eksplisit.
 try:
-    MAX_FORECAST_MONTHS = max(1, int(cfg.get("dashboard_max_selectable_months", artifacts.get("dashboard_max_selectable_months", 12))))
+    LEGACY_MAX_SELECTABLE_MONTHS = max(
+        1,
+        int(cfg.get("dashboard_max_selectable_months", artifacts.get("dashboard_max_selectable_months", 12))),
+    )
 except Exception:
-    MAX_FORECAST_MONTHS = 12
+    LEGACY_MAX_SELECTABLE_MONTHS = 12
+
+try:
+    DASHBOARD_MAX_SELECTABLE_YEARS = max(
+        1,
+        int(cfg.get("dashboard_max_selectable_years", artifacts.get("dashboard_max_selectable_years", 10))),
+    )
+except Exception:
+    DASHBOARD_MAX_SELECTABLE_YEARS = 10
+
+try:
+    DASHBOARD_MAX_TARGET_YEAR = int(
+        cfg.get(
+            "dashboard_max_target_year",
+            artifacts.get("dashboard_max_target_year", last_observed.year + DASHBOARD_MAX_SELECTABLE_YEARS),
+        )
+    )
+except Exception:
+    DASHBOARD_MAX_TARGET_YEAR = last_observed.year + DASHBOARD_MAX_SELECTABLE_YEARS
+
+DASHBOARD_MAX_TARGET_YEAR = max(DASHBOARD_MAX_TARGET_YEAR, target_output_month.year)
+max_target_month = pd.Timestamp(year=DASHBOARD_MAX_TARGET_YEAR, month=12, day=1).to_period("M").to_timestamp("M")
+max_input_month = (max_target_month.to_period("M") - DASHBOARD_FORECAST_HORIZON).to_timestamp("M")
+
+MONTHS_UNTIL_MAX_TARGET = (
+    max_input_month.to_period("M").ordinal - next_month.to_period("M").ordinal + 1
+)
+MAX_FORECAST_MONTHS = max(1, LEGACY_MAX_SELECTABLE_MONTHS, MONTHS_UNTIL_MAX_TARGET)
+
 available_input_months = month_range(next_month, MAX_FORECAST_MONTHS)
 available_target_months = pd.DatetimeIndex([
     (month.to_period("M") + DASHBOARD_FORECAST_HORIZON).to_timestamp("M")
