@@ -1,8 +1,6 @@
 # dashboardprediksi_TWP90
 
-Paket ini menyesuaikan **logika** `app.py`, `pipeline_export_artifacts.py`, dan README berdasarkan isi `hybrid_twp90_model.joblib` serta `preprocessing_config.json`. Desain visual dashboard tetap dipertahankan; revisi berfokus pada logika input TWP90 aktual, pembentukan fitur, aturan periode prediksi, dan penampilan hasil prediksi berantai.
-
-## Inti logika yang dipakai
+## Inti logika model
 
 Metadata model menunjukkan skema:
 
@@ -125,32 +123,3 @@ Kolom persen diisi sebagai angka persen asli, bukan bentuk desimal internal mode
 Nilai 0 dianggap belum diisi, sehingga prediksi tidak akan ditampilkan jika masih ada input 0 atau kosong.
 
 Menu prediksi menyediakan pilihan periode target melalui kalender, bukan list/dropdown. Secara default rentang bulan target mengikuti `dashboard_max_selectable_months`. Jika ingin mengubah jumlah bulan target yang bisa dipilih, tambahkan nilai `dashboard_max_selectable_months` pada `preprocessing_config.json`.
-
-## Catatan hasil prediksi berantai
-
-Pada menu prediksi, tabel hasil sekarang menampilkan:
-
-- periode prediksi;
-- jenis periode, yaitu `Aktual TWP90 input` atau `Target prediksi`;
-- TWP90 aktual input untuk bulan sebelum target;
-- prediksi SARIMAX;
-- prediksi residual XGBoost log;
-- prediksi hybrid/TWP90;
-- selisih prediksi-aktual untuk bulan yang memiliki TWP90 aktual input;
-- status risiko.
-
-Contoh: jika user memilih target Maret, tabel akan menampilkan prediksi Januari, Februari, dan Maret. Januari dan Februari memiliki kolom TWP90 aktual input, sedangkan Maret menjadi target utama yang diprediksi.
-
-## Catatan revisi error prediksi
-
-Peringatan seperti:
-
-```text
-Prediksi gagal dihitung: "['Residual_SARIMAX_Log_roll_std_6'] not in index"
-```
-
-muncul karena daftar fitur XGBoost pada artifact meminta fitur rolling standar deviasi residual window 6 (`roll_std_6`), sedangkan `app.py` lama hanya membentuk `roll_std_3`. Pada versi revisi, pembentukan fitur residual dibuat dinamis mengikuti `residual_feature_cols` dari joblib/json, sehingga fitur seperti `Residual_SARIMAX_Log_roll_mean_3`, `roll_mean_6`, `roll_std_3`, maupun `roll_std_6` akan dibuat bila memang dibutuhkan oleh model.
-
-## Catatan metodologis
-
-Revisi ini tidak mengubah desain dashboard dan tidak mengubah model final pada joblib. Perubahan hanya menyelaraskan logika deployment dengan artifact: SARIMAX tetap memakai fitur yang tercatat pada joblib/json, XGBoost tetap memprediksi residual SARIMAX log, TWP90 aktual input hanya digunakan untuk update state/residual pada bulan sebelum target, dan hasil akhir tetap berupa hybrid SARIMAX + residual XGBoost yang dikembalikan ke skala TWP90 original.
