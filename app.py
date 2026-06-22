@@ -840,16 +840,11 @@ def evaluation_metrics(eval_df):
     rmse = float(np.sqrt((df["Error_pp"] ** 2).mean()))
     mape = float((df.loc[nonzero, "Abs_Error_pp"] / df.loc[nonzero, "Actual_%"].abs()).mean() * 100) if nonzero.any() else np.nan
     bias = float(df["Error_pp"].mean())
-    sse = float(((df["Actual_%"] - df["Predicted_%"]) ** 2).sum())
-    sst = float(((df["Actual_%"] - df["Actual_%"].mean()) ** 2).sum())
-    r2 = float(1 - sse / sst) if sst > 0 else np.nan
-
     return {
         "MAE_pp": mae,
         "RMSE_pp": rmse,
         "MAPE_%": mape,
         "Bias_pp": bias,
-        "R2": r2,
         "N": int(len(df)),
         "Source": str(df["Source"].iloc[0]) if "Source" in df.columns else "-",
     }, df, scale
@@ -1722,7 +1717,7 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
     current_mape = summary.get("MAPE_%")
     current_mape_text = "-" if pd.isna(current_mape) else f"{current_mape:.2f}%"
 
-    e1, e2, e3, e4, e5 = st.columns(5)
+    e1, e2, e3, e4 = st.columns(4)
     with e1:
         st.markdown(value_card("MAE", f"{summary['MAE_pp']:.3f} pp", "Rata-rata selisih absolut"), unsafe_allow_html=True)
     with e2:
@@ -1730,9 +1725,6 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
     with e3:
         st.markdown(value_card("MAPE", current_mape_text, "Persentase rata-rata kesalahan absolut"), unsafe_allow_html=True)
     with e4:
-        r2_val = "-" if pd.isna(summary["R2"]) else f"{summary['R2']:.3f}"
-        st.markdown(value_card("R²", r2_val, "Kecocokan aktual-prediksi"), unsafe_allow_html=True)
-    with e5:
         st.markdown(value_card("Observasi", f"{summary['N']}", summary["Source"]), unsafe_allow_html=True)
 
     eval_plot = detail.copy()
