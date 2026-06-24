@@ -229,10 +229,10 @@ def dummy_covid_for_index(index):
 
 def classify_risk(value, orange=0.04, red=0.05):
     if value < orange:
-        return "AMAN", "#16a34a", f"TWP90 masih di bawah {orange * 100:.0f}%."
+        return "AMAN", "#16a34a", f"TWP90 masih di bawah {orange * 100:.2f}%."
     if value < red:
-        return "WASPADA", "#f97316", f"TWP90 berada pada zona {orange * 100:.0f}% sampai kurang dari {red * 100:.0f}%."
-    return "BAHAYA", "#dc2626", f"TWP90 melewati ambang {red * 100:.0f}%."
+        return "WASPADA", "#f97316", f"TWP90 berada pada zona {orange * 100:.2f}% sampai kurang dari {red * 100:.2f}%."
+    return "BAHAYA", "#dc2626", f"TWP90 melewati ambang {red * 100:.2f}%."
 
 
 def get_risk_thresholds(cfg, artifacts):
@@ -979,6 +979,15 @@ def clean_undefined_strings(df):
     return out
 
 
+def round_numeric_display(df, digits=2):
+    """Membulatkan seluruh kolom angka untuk tampilan tabel dan file unduhan."""
+    out = df.copy()
+    numeric_cols = out.select_dtypes(include=[np.number]).columns
+    if len(numeric_cols) > 0:
+        out[numeric_cols] = out[numeric_cols].round(int(digits))
+    return out
+
+
 def _html_text(value):
     if pd.isna(value):
         return ""
@@ -994,13 +1003,13 @@ def _progress_html(value, max_value, suffix="%"):
     suffix = escape(str(suffix))
     return f"""
     <div class="progress-cell">
-        <div class="progress-meta"><span>{float(value):.3f}</span><span>{suffix}</span></div>
+        <div class="progress-meta"><span>{float(value):.2f}</span><span>{suffix}</span></div>
         <div class="progress-track"><div class="progress-fill" style="width:{width:.2f}%;"></div></div>
     </div>
     """
 
 
-def _number_html(value, digits=3, suffix=""):
+def _number_html(value, digits=2, suffix=""):
     value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.isna(value):
         return ""
@@ -1060,7 +1069,7 @@ def render_modern_blue_table(
             elif col in delta_cols:
                 delta = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
                 cls = "delta-pos" if pd.notna(delta) and float(delta) >= 0 else "delta-neg"
-                display = "" if pd.isna(delta) else f"{float(delta):.3f}"
+                display = "" if pd.isna(delta) else f"{float(delta):.2f}"
                 cells.append(f'<td><span class="{cls}">{display}</span></td>')
             elif col in status_cols:
                 cells.append(f"<td>{_status_badge_html(value)}</td>")
@@ -1682,8 +1691,8 @@ def show_historical_chart():
             marker=dict(size=7, color="#1e3a8a"),
             hovertemplate="%{x|%b %Y}<br>Aktual: %{y:.2f}%<extra></extra>",
         ))
-    fig.add_hline(y=RISK_ORANGE_PCT, line_dash="dash", line_color="#f97316", annotation_text=f"Waspada {RISK_ORANGE_PCT:.0f}%")
-    fig.add_hline(y=RISK_RED_PCT, line_dash="dash", line_color="#dc2626", annotation_text=f"Bahaya {RISK_RED_PCT:.0f}%")
+    fig.add_hline(y=RISK_ORANGE_PCT, line_dash="dash", line_color="#f97316", annotation_text=f"Waspada {RISK_ORANGE_PCT:.2f}%")
+    fig.add_hline(y=RISK_RED_PCT, line_dash="dash", line_color="#dc2626", annotation_text=f"Bahaya {RISK_RED_PCT:.2f}%")
     fig.update_layout(
         height=520,
         title=dict(text=""),
@@ -1719,9 +1728,9 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
 
     e1, e2, e3, e4 = st.columns(4)
     with e1:
-        st.markdown(value_card("MAE", f"{summary['MAE_pp']:.3f} pp", "Rata-rata selisih absolut"), unsafe_allow_html=True)
+        st.markdown(value_card("MAE", f"{summary['MAE_pp']:.2f} pp", "Rata-rata selisih absolut"), unsafe_allow_html=True)
     with e2:
-        st.markdown(value_card("RMSE", f"{summary['RMSE_pp']:.3f} pp", "Rata-rata kuadrat kesalahan antara nilai prediksi dan aktual"), unsafe_allow_html=True)
+        st.markdown(value_card("RMSE", f"{summary['RMSE_pp']:.2f} pp", "Rata-rata kuadrat kesalahan antara nilai prediksi dan aktual"), unsafe_allow_html=True)
     with e3:
         st.markdown(value_card("MAPE", current_mape_text, "Persentase rata-rata kesalahan absolut"), unsafe_allow_html=True)
     with e4:
@@ -1778,7 +1787,7 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
         )
 
     st.markdown('<div class="eval-table-title">Tabel Detail Evaluasi Aktual vs Prediksi</div>', unsafe_allow_html=True)
-    eval_table = clean_undefined_strings(eval_table)
+    eval_table = round_numeric_display(clean_undefined_strings(eval_table), 2)
     render_modern_blue_table(
         eval_table,
         progress_cols=[c for c in ["TWP90 Aktual (%)", "Prediksi Hybrid (%)", "Abs Error (pp)"] if c in eval_table.columns],
@@ -1812,7 +1821,7 @@ def show_history_table():
             "Selisih_pp": "Selisih (pp)",
             "Status": "Status Risiko",
         })
-        table = clean_undefined_strings(table)
+        table = round_numeric_display(clean_undefined_strings(table), 2)
     else:
         table = raw_history.reset_index().copy()
         table["Month"] = table["Month"].dt.strftime("%Y-%m")
@@ -1824,7 +1833,7 @@ def show_history_table():
             "Status": "Status Risiko",
         })
         table = table.rename(columns={target_col: "TWP90 Aktual (%)"})
-        table = clean_undefined_strings(table)
+        table = round_numeric_display(clean_undefined_strings(table), 2)
 
     render_modern_history_table(table)
 
@@ -1962,7 +1971,7 @@ elif selected_menu == "Prediksi TWP90":
                     "TWP90 aktual bulan ini (%) *",
                     value=cached_input_value(month, TWP90_INPUT_COL, None),
                     step=0.01,
-                    format="%.6f",
+                    format="%.2f",
                     help="Isi nilai TWP90 aktual periode input dalam angka persen asli. Contoh: 4,32% ditulis 4.32.",
                     key=f"num_{current_signature}_{month_key}_{TWP90_INPUT_COL}",
                 )
@@ -1977,7 +1986,7 @@ elif selected_menu == "Prediksi TWP90":
                             f"{make_display_name(col, percent_cols)} *",
                             value=default_value,
                             step=input_step_for_column(col, percent_cols),
-                            format="%.6f",
+                            format="%.2f",
                             help=COLUMN_HELP.get(col, "Isi sesuai skala historis model."),
                             key=f"num_{current_signature}_{month_key}_{col}",
                         )
@@ -2080,15 +2089,15 @@ elif selected_menu == "Prediksi TWP90":
                     <div class="component-grid">
                         <div class="component-item">
                             <div class="component-label">SARIMAX</div>
-                            <div class="component-value">{selected_row['Prediksi_SARIMAX_Original'] * 100:.3f}%</div>
+                            <div class="component-value">{selected_row['Prediksi_SARIMAX_Original'] * 100:.2f}%</div>
                         </div>
                         <div class="component-item">
                             <div class="component-label">Residual XGBoost log</div>
-                            <div class="component-value">{selected_row['Prediksi_Residual_XGB_Log']:.6f}</div>
+                            <div class="component-value">{selected_row['Prediksi_Residual_XGB_Log']:.2f}</div>
                         </div>
                         <div class="component-item">
                             <div class="component-label">Hybrid original</div>
-                            <div class="component-value">{selected_row['Prediksi_Hybrid_Original']:.6f}</div>
+                            <div class="component-value">{selected_row['Prediksi_Hybrid_Original']:.2f}</div>
                         </div>
                     </div>
                 </div>
@@ -2139,7 +2148,7 @@ elif selected_menu == "Prediksi TWP90":
                 "Error_Hybrid_pp": "Selisih Prediksi-Aktual (pp)",
                 "Status": "Status Risiko",
             })
-            display_result = clean_undefined_strings(display_result)
+            display_result = round_numeric_display(clean_undefined_strings(display_result), 2)
             render_modern_blue_table(
                 display_result,
                 progress_cols=["SARIMAX (%)", "Prediksi Hybrid (%)", "Prediksi TWP90 (%)"],
@@ -2218,8 +2227,8 @@ elif selected_menu == "Prediksi TWP90":
                 marker=dict(size=12, color="#38bdf8", line=dict(width=2, color="#0f2a5f")),
                 hovertemplate="%{x|%b %Y}<br>Prediksi: %{y:.2f}%<extra></extra>",
             ))
-            fig.add_hline(y=RISK_ORANGE_PCT, line_dash="dash", line_color="#f97316", annotation_text=f"Waspada {RISK_ORANGE_PCT:.0f}%")
-            fig.add_hline(y=RISK_RED_PCT, line_dash="dash", line_color="#dc2626", annotation_text=f"Bahaya {RISK_RED_PCT:.0f}%")
+            fig.add_hline(y=RISK_ORANGE_PCT, line_dash="dash", line_color="#f97316", annotation_text=f"Waspada {RISK_ORANGE_PCT:.2f}%")
+            fig.add_hline(y=RISK_RED_PCT, line_dash="dash", line_color="#dc2626", annotation_text=f"Bahaya {RISK_RED_PCT:.2f}%")
             fig.update_layout(
                 height=540,
                 title="Tren Historis, TWP90 Input, dan Prediksi Berantai",
