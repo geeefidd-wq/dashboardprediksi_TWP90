@@ -258,7 +258,7 @@ def prepare_future_input_template(raw_history, future_months, exog_cols, percent
     for month in future_months:
         row = {"Month": month.strftime("%Y-%m")}
         for col in exog_cols:
-            row[col] = 0.0
+            row[col] = None
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -1928,16 +1928,17 @@ elif selected_menu == "Prediksi TWP90":
         if cached_cache.get("signature") == current_signature:
             cached_prediction_input = cached_cache.get("input_df", pd.DataFrame()).copy()
 
-    def cached_input_value(month_value, column_name, fallback=0.0):
+    def cached_input_value(month_value, column_name, fallback=None):
+        # Form input default dibuat kosong. Jika cache kosong/invalid/0, tampilkan blank.
         if cached_prediction_input is None or cached_prediction_input.empty:
-            return float(fallback)
+            return fallback
         month_text = month_value.strftime("%Y-%m")
         matched = cached_prediction_input[cached_prediction_input["Month"].astype(str) == month_text]
         if matched.empty or column_name not in matched.columns:
-            return float(fallback)
+            return fallback
         value = pd.to_numeric(pd.Series([matched.iloc[0][column_name]]), errors="coerce").iloc[0]
-        if pd.isna(value):
-            return float(fallback)
+        if pd.isna(value) or abs(float(value)) <= 1e-12:
+            return fallback
         return float(value)
 
     with st.form("prediction_form", clear_on_submit=False):
@@ -1959,7 +1960,7 @@ elif selected_menu == "Prediksi TWP90":
                 row = {"Month": month.strftime("%Y-%m")}
                 row[TWP90_INPUT_COL] = st.number_input(
                     "TWP90 aktual bulan ini (%) *",
-                    value=cached_input_value(month, TWP90_INPUT_COL, 0.0),
+                    value=cached_input_value(month, TWP90_INPUT_COL, None),
                     step=0.01,
                     format="%.6f",
                     help="Isi nilai TWP90 aktual periode input dalam angka persen asli. Contoh: 4,32% ditulis 4.32.",
@@ -1969,10 +1970,8 @@ elif selected_menu == "Prediksi TWP90":
                 input_columns = st.columns(2)
                 template_row = editor_template.loc[editor_template["Month"] == month.strftime("%Y-%m")]
                 for j, col in enumerate(exog_cols):
-                    default_value = 0.0
-                    if not template_row.empty and col in template_row.columns and pd.notna(template_row.iloc[0][col]):
-                        default_value = float(template_row.iloc[0][col])
-                    default_value = cached_input_value(month, col, default_value)
+                    # Default input dibuat kosong, bukan 0.
+                    default_value = cached_input_value(month, col, None)
                     with input_columns[j % 2]:
                         row[col] = st.number_input(
                             f"{make_display_name(col, percent_cols)} *",
