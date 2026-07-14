@@ -7,14 +7,23 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
+
 st.set_page_config(
     page_title="Dashboard Prediksi TWP90 Hybrid",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
 APP_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
 ARTIFACT_DIR = os.environ.get("MODEL_ARTIFACT_DIR", os.path.join(APP_DIR, "model_artifacts"))
+
+
 def resolve_artifact_path(filename: str) -> str:
+    """Cari artifact di MODEL_ARTIFACT_DIR, folder model_artifacts, lalu folder app.py.
+
+    Logika ini tidak mengubah desain dashboard; hanya membuat deployment lebih fleksibel
+    untuk paket yang menaruh joblib/json langsung satu folder dengan app.py.
+    """
     candidates = []
     env_dir = os.environ.get("MODEL_ARTIFACT_DIR")
     if env_dir:
@@ -33,10 +42,13 @@ def resolve_artifact_path(filename: str) -> str:
         if os.path.exists(path):
             return path
     return unique_candidates[0]
+
+
 MODEL_PATH = resolve_artifact_path("hybrid_twp90_model.joblib")
 CONFIG_PATH = resolve_artifact_path("preprocessing_config.json")
 RAW_HISTORY_PATH = resolve_artifact_path("raw_history.csv")
 DASHBOARD_HISTORY_PATH = resolve_artifact_path("dashboard_twp90_history.csv")
+
 DATE_COL_DEFAULT = "Month"
 TARGET_DEFAULT = "TWP90 (%)"
 RESIDUAL_TARGET_DEFAULT = "Residual_SARIMAX_Log"
@@ -46,7 +58,9 @@ PERCENT_COL_CANDIDATES = {
     "Inflasi",
     "Pertumbuhan Outstanding (YoY% atau MoM%)",
 }
+
 TWP90_INPUT_COL = "TWP90_Aktual_Input_%"
+
 FRIENDLY_LABELS = {
     "Outstanding Pinjaman (miliar RP)": "Outstanding Pinjaman",
     "BI-7Day-RR": "BI-7Day-RR",
@@ -56,6 +70,7 @@ FRIENDLY_LABELS = {
     "Indeks Keyakinan Konsumen (IKK)": "IKK",
     "Nilai Tukar Rupiah terhadap USD": "Nilai Tukar USD/IDR",
 }
+
 COLUMN_HELP = {
     "Outstanding Pinjaman (miliar RP)": "Isi sesuai satuan historis model, yaitu miliar rupiah.",
     "BI-7Day-RR": "Isi angka persen asli. Contoh: 5,75% ditulis 5.75.",
@@ -65,22 +80,30 @@ COLUMN_HELP = {
     "Indeks Keyakinan Konsumen (IKK)": "Isi angka indeks IKK sesuai data/estimasi bulan tersebut.",
     "Nilai Tukar Rupiah terhadap USD": "Isi kurs rupiah terhadap USD sesuai skala historis model.",
 }
+
+
 def _missing_file_message(path: str) -> str:
     return (
         f"File tidak ditemukan: {path}. Pastikan artifact tersedia di folder model_artifacts "
         "atau satu folder dengan app.py."
     )
+
+
 @st.cache_resource(show_spinner=False)
 def load_artifacts():
     if not os.path.exists(MODEL_PATH):
         raise FileNotFoundError(_missing_file_message(MODEL_PATH))
     return joblib.load(MODEL_PATH)
+
+
 @st.cache_data(show_spinner=False)
 def load_config():
     if not os.path.exists(CONFIG_PATH):
         return {}
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
 @st.cache_data(show_spinner=False)
 def load_raw_history(date_col, target_col):
     if not os.path.exists(RAW_HISTORY_PATH):
@@ -97,7 +120,14 @@ def load_raw_history(date_col, target_col):
     if target_col not in df.columns:
         raise ValueError(f"Kolom target '{target_col}' tidak ditemukan pada raw_history.csv.")
     return df
+
+
 def history_from_joblib_artifact(artifacts, target_col):
+    """Fallback tampilan/evaluasi jika raw_history.csv belum ikut disalin.
+
+    Untuk prediksi, dashboard tetap membutuhkan raw_history.csv lengkap berisi variabel
+    eksternal historis karena fitur model berasal dari differencing dan lag eksogen.
+    """
     df = artifacts.get("test_results_hybrid") if isinstance(artifacts, dict) else None
     if isinstance(df, pd.DataFrame) and not df.empty and "Actual_Original" in df.columns:
         out = df[["Actual_Original"]].copy().rename(columns={"Actual_Original": target_col})
@@ -105,6 +135,8 @@ def history_from_joblib_artifact(artifacts, target_col):
         out.index.name = "Month"
         return out.sort_index()
     return pd.DataFrame()
+
+
 def test_predictions_from_joblib_artifact(artifacts):
     df = artifacts.get("test_results_hybrid") if isinstance(artifacts, dict) else None
     if isinstance(df, pd.DataFrame) and not df.empty:
@@ -114,6 +146,8 @@ def test_predictions_from_joblib_artifact(artifacts):
         out["Month"] = pd.to_datetime(out["Month"], errors="coerce").dt.to_period("M").dt.to_timestamp("M")
         return out.sort_values("Month")
     return pd.DataFrame()
+
+
 @st.cache_data(show_spinner=False)
 def load_dashboard_history():
     if not os.path.exists(DASHBOARD_HISTORY_PATH):
@@ -124,67 +158,101 @@ def load_dashboard_history():
         if col not in ["Month", "Data_Type"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df.sort_values("Month")
+
+
 def normalize_month_end(value):
     return pd.to_datetime(value).to_period("M").to_timestamp("M")
+
+
 def month_range(start_month, horizon):
     start_period = normalize_month_end(start_month).to_period("M")
     return pd.DatetimeIndex([(start_period + i).to_timestamp("M") for i in range(int(horizon))])
+
+
 def to_date(value):
     return pd.to_datetime(value).date()
+
+
 def normalize_percent_to_decimal(value):
     value = float(value)
     return value / 100.0 if abs(value) > 1 else value
+
+
 def to_percent_display(value):
     if pd.isna(value):
         return 0.0
     value = float(value)
     return value * 100.0 if abs(value) <= 1 else value
+
+
 def fmt_pct(value, digits=2):
     if pd.isna(value):
         return ""
     return f"{float(value):.{digits}f}%"
+
+
 def get_target_col(cfg, artifacts):
     return cfg.get("target") or artifacts.get("target") or TARGET_DEFAULT
+
+
 def get_date_col(cfg):
     return cfg.get("date_col", DATE_COL_DEFAULT)
+
+
 def get_exog_input_columns(cfg, raw_history, target_col, artifacts=None):
     artifact_cols = [] if artifacts is None else artifacts.get("raw_input_columns", [])
     configured_cols = cfg.get("raw_input_columns") or artifact_cols
     if configured_cols:
         return [c for c in configured_cols if c != target_col]
+
     diff_cols = list((cfg.get("differencing_orders_exog") or (artifacts or {}).get("differencing_orders_exog") or {}).keys())
     if diff_cols:
         return [c for c in diff_cols if c != target_col]
+
     if raw_history is None or raw_history.empty:
         return []
     return [c for c in raw_history.columns if c != target_col]
+
+
 def get_percent_columns(cfg, exog_cols, artifacts=None):
     artifact_cols = [] if artifacts is None else artifacts.get("percent_columns_decimal_in_model", [])
     percent_cols = set(cfg.get("percent_columns_decimal_in_model", []) or artifact_cols)
     if not percent_cols:
         percent_cols = set(PERCENT_COL_CANDIDATES)
     return {c for c in exog_cols if c in percent_cols}
+
+
 def dummy_covid_for_index(index):
     period_index = pd.DatetimeIndex(index).to_period("M")
     return ((period_index >= "2020-03") & (period_index <= "2021-12")).astype(int)
+
+
 def classify_risk(value, orange=0.04, red=0.05):
     if value < orange:
         return "AMAN", "#16a34a", f"TWP90 masih di bawah {orange * 100:.2f}%."
     if value < red:
         return "WASPADA", "#f97316", f"TWP90 berada pada zona {orange * 100:.2f}% sampai kurang dari {red * 100:.2f}%."
     return "BAHAYA", "#dc2626", f"TWP90 melewati ambang {red * 100:.2f}%."
+
+
 def get_risk_thresholds(cfg, artifacts):
     orange = float(cfg.get("threshold_orange", artifacts.get("threshold_orange", 0.04)))
     red = float(cfg.get("threshold_red", artifacts.get("threshold_red", 0.05)))
     return orange, red
+
+
 def risk_status_from_percent(value_pct, orange, red):
     status, _, _ = classify_risk(float(value_pct) / 100.0, orange, red)
     return status
+
+
 def make_display_name(col, percent_cols):
     label = FRIENDLY_LABELS.get(col, col)
     if col in percent_cols:
         return f"{label} (%)"
     return label
+
+
 def prepare_future_input_template(raw_history, future_months, exog_cols, percent_cols, mode="zero"):
     rows = []
     for month in future_months:
@@ -193,6 +261,8 @@ def prepare_future_input_template(raw_history, future_months, exog_cols, percent
             row[col] = None
         rows.append(row)
     return pd.DataFrame(rows)
+
+
 def convert_editor_to_future_raw(editor_df, exog_cols, percent_cols):
     future = editor_df.copy()
     future["Month"] = pd.to_datetime(future["Month"].astype(str) + "-01", errors="coerce").dt.to_period("M").dt.to_timestamp("M")
@@ -200,6 +270,7 @@ def convert_editor_to_future_raw(editor_df, exog_cols, percent_cols):
         raise ValueError("Kolom Month pada tabel input tidak valid. Gunakan format YYYY-MM.")
     if future["Month"].duplicated().any():
         raise ValueError("Terdapat bulan prediksi yang duplikat. Pastikan setiap bulan hanya muncul satu kali.")
+
     clean = pd.DataFrame(index=future["Month"])
     for col in exog_cols:
         if col not in future.columns:
@@ -212,28 +283,42 @@ def convert_editor_to_future_raw(editor_df, exog_cols, percent_cols):
         clean[col] = values.values
     clean.index.name = "Month"
     return clean.sort_index()
+
+
 def convert_editor_to_future_target(editor_df, target_input_col=TWP90_INPUT_COL, target_col=TARGET_DEFAULT):
+    """Konversi input TWP90 aktual dari UI ke skala desimal internal model.
+
+    Di UI user mengisi angka persen asli, misalnya 4,32% ditulis 4.32.
+    Di balik layar nilainya dinormalisasi menjadi 0.0432 agar konsisten dengan target model.
+    """
     future = editor_df.copy()
     future["Month"] = pd.to_datetime(future["Month"].astype(str) + "-01", errors="coerce").dt.to_period("M").dt.to_timestamp("M")
     if future["Month"].isna().any():
         raise ValueError("Kolom Month pada input TWP90 tidak valid. Gunakan format YYYY-MM.")
     if target_input_col not in future.columns:
         raise ValueError("Kolom input TWP90 aktual belum tersedia pada form prediksi.")
+
     values = pd.to_numeric(future[target_input_col], errors="coerce")
     if values.isna().any():
         raise ValueError("Nilai TWP90 aktual masih mengandung nilai kosong atau bukan angka.")
     values = values.apply(normalize_percent_to_decimal)
     if (values <= 0).any():
         raise ValueError("Nilai TWP90 aktual harus lebih besar dari 0.")
+
     out = pd.Series(values.values, index=future["Month"], name=target_col)
     out.index.name = "Month"
     return out.sort_index()
+
+
 def prepare_stationary_exog_from_raw(raw_all, differencing_orders):
     raw_all = raw_all.copy().sort_index()
     raw_all.index = pd.to_datetime(raw_all.index).to_period("M").to_timestamp("M")
+
     for col in raw_all.columns:
         raw_all[col] = pd.to_numeric(raw_all[col], errors="coerce")
+
     raw_all = raw_all.ffill()
+
     stationary = pd.DataFrame(index=raw_all.index)
     for col, order in differencing_orders.items():
         if col not in raw_all.columns:
@@ -248,21 +333,33 @@ def prepare_stationary_exog_from_raw(raw_all, differencing_orders):
         else:
             raise ValueError(f"Differencing order {order} belum didukung untuk kolom {col}.")
     return stationary
+
+
 def build_features_from_stationary(stationary, exog_lags_config):
     full = stationary.copy().sort_index()
     full["Year"] = full.index.year
     full["Month_Num"] = full.index.month
     full["dummy_covid"] = dummy_covid_for_index(full.index)
+
     for col, lags in exog_lags_config.items():
         if col not in full.columns:
             continue
         for lag in lags:
             full[f"{col}_lag{int(lag)}"] = full[col].shift(int(lag))
     return full
+
+
 def _extract_residual_feature_spec(residual_feature_cols, residual_target, target_lags):
+    """Ambil kebutuhan fitur residual dari metadata artifact.
+
+    Beberapa artifact menyimpan fitur seperti Residual_SARIMAX_Log_roll_std_6.
+    Fungsi ini membuat dashboard mengikuti daftar fitur pada joblib/json, bukan
+    mengunci fitur rolling hanya pada window tertentu.
+    """
     lag_set = {int(lag) for lag in (target_lags or [])}
     roll_mean_windows = {3, 6}
     roll_std_windows = {3, 6}
+
     prefix = f"{residual_target}_"
     for feature in residual_feature_cols or []:
         feature = str(feature)
@@ -272,14 +369,19 @@ def _extract_residual_feature_spec(residual_feature_cols, residual_target, targe
             except ValueError:
                 pass
         elif feature.startswith(f"{prefix}roll_mean_"):
-            try:             roll_mean_windows.add(int(feature.replace(f"{prefix}roll_mean_", "")))
+            try:
+                roll_mean_windows.add(int(feature.replace(f"{prefix}roll_mean_", "")))
             except ValueError:
                 pass
         elif feature.startswith(f"{prefix}roll_std_"):
-            try:                roll_std_windows.add(int(feature.replace(f"{prefix}roll_std_", "")))
+            try:
+                roll_std_windows.add(int(feature.replace(f"{prefix}roll_std_", "")))
             except ValueError:
                 pass
+
     return sorted(lag_set), sorted(roll_mean_windows), sorted(roll_std_windows)
+
+
 def add_residual_lag_features(df, residual_target, target_lags, residual_feature_cols=None):
     df = df.copy()
     lag_list, roll_mean_windows, roll_std_windows = _extract_residual_feature_spec(
@@ -287,6 +389,7 @@ def add_residual_lag_features(df, residual_target, target_lags, residual_feature
         residual_target,
         target_lags,
     )
+
     residual_series = df[residual_target].shift(1)
     for lag in lag_list:
         df[f"{residual_target}_lag{int(lag)}"] = df[residual_target].shift(int(lag))
@@ -295,12 +398,15 @@ def add_residual_lag_features(df, residual_target, target_lags, residual_feature
     for window in roll_std_windows:
         df[f"{residual_target}_roll_std_{int(window)}"] = residual_series.rolling(window=int(window)).std()
     return df
+
+
 def predict_xgb_residual_recursive(model, X_future_base, residual_history, feature_columns, residual_target, residual_feature_cols, target_lags):
     residual_history = pd.Series(residual_history).copy()
     residual_history.index = pd.to_datetime(residual_history.index).to_period("M").to_timestamp("M")
     residual_history.name = residual_target
     preds = []
     feature_rows = []
+
     for idx in X_future_base.index:
         temp = pd.concat([
             residual_history,
@@ -309,14 +415,19 @@ def predict_xgb_residual_recursive(model, X_future_base, residual_history, featu
         temp_df = add_residual_lag_features(pd.DataFrame({residual_target: temp}), residual_target, target_lags, residual_feature_cols)
         residual_row = temp_df.loc[[idx], residual_feature_cols]
         x_row = pd.concat([X_future_base.loc[[idx]].copy(), residual_row], axis=1).reindex(columns=feature_columns)
+
         if x_row.isna().any().any():
             missing = x_row.columns[x_row.isna().any()].tolist()
             raise ValueError(f"Fitur residual belum lengkap untuk {idx.strftime('%Y-%m')}: {missing}")
+
         pred = float(model.predict(x_row)[0])
         preds.append(pred)
         feature_rows.append(x_row)
         residual_history.loc[idx] = pred
+
     return pd.Series(preds, index=X_future_base.index, name="Prediksi_Residual_XGB_Log"), pd.concat(feature_rows, axis=0)
+
+
 def derive_xgb_base_cols_from_final(final_cols, residual_feature_cols):
     residual_set = set(residual_feature_cols)
     return [c for c in final_cols if c not in residual_set]
@@ -327,6 +438,8 @@ def get_forecast_horizon(cfg, artifacts):
         return max(1, int(cfg.get("forecast_horizon", artifacts.get("forecast_horizon", 1))))
     except Exception:
         return 1
+
+
 def ensure_raw_history_has_required_exog(raw_history, differencing_orders):
     required_cols = list((differencing_orders or {}).keys())
     missing_cols = [col for col in required_cols if col not in raw_history.columns]
@@ -335,7 +448,10 @@ def ensure_raw_history_has_required_exog(raw_history, differencing_orders):
             "raw_history.csv lengkap diperlukan untuk membentuk differencing dan lag variabel eksternal. "
             "Kolom historis yang belum tersedia: " + ", ".join(missing_cols) + "."
         )
+
+
 def _predict_sarimax_one_step(sarimax_model, X_row, model_library):
+    """Prediksi satu langkah dari model SARIMAX/pmdarima yang sedang aktif."""
     if hasattr(sarimax_model, "predict") and model_library == "pmdarima.ARIMA":
         pred = sarimax_model.predict(n_periods=1, X=X_row)
     elif hasattr(sarimax_model, "forecast"):
@@ -343,7 +459,10 @@ def _predict_sarimax_one_step(sarimax_model, X_row, model_library):
     else:
         pred = sarimax_model.predict(n_periods=1, X=X_row)
     return float(np.asarray(pred, dtype=float).reshape(-1)[0])
+
+
 def _update_sarimax_with_actual(sarimax_model, actual_value, X_row):
+    """Update state SARIMAX dengan TWP90 aktual input user tanpa menyimpan ulang model artifact."""
     if not hasattr(sarimax_model, "update"):
         return sarimax_model
     y = np.asarray([float(actual_value)], dtype=float)
@@ -355,7 +474,10 @@ def _update_sarimax_with_actual(sarimax_model, actual_value, X_row):
         except Exception:
             sarimax_model.update(y, X=X_row)
     return sarimax_model
+
+
 def _predict_xgb_residual_one_step(model, X_base_row, residual_history, feature_columns, residual_target, residual_feature_cols, target_lags):
+    """Prediksi residual XGBoost satu langkah dengan residual history terbaru."""
     idx = X_base_row.index[0]
     temp = pd.concat([
         residual_history,
@@ -374,7 +496,18 @@ def _predict_xgb_residual_one_step(model, X_base_row, residual_history, feature_
         raise ValueError(f"Fitur residual belum lengkap untuk {idx.strftime('%Y-%m')}: {missing}")
     pred = float(model.predict(x_row)[0])
     return pred, x_row
+
+
 def predict_hybrid_from_latest_input(raw_history, input_raw_exog, artifacts, cfg, input_raw_target=None):
+    """Prediksi dashboard berbasis target TWP90 aktual input user.
+
+    Alur:
+    - User memilih periode TWP90 target yang ingin dicari.
+    - User mengisi variabel eksternal dan TWP90 aktual untuk bulan-bulan sebelum target.
+    - Sistem melakukan one-step-ahead secara berurutan.
+    - TWP90 aktual input dipakai untuk memperbarui state SARIMAX dan residual history XGBoost.
+    - Semua prediksi bulan sebelumnya sampai target akhir ditampilkan.
+    """
     input_months = pd.DatetimeIndex(input_raw_exog.index).sort_values()
     if len(input_months) == 0:
         raise ValueError("Minimal harus ada satu periode input.")
@@ -386,9 +519,11 @@ def predict_hybrid_from_latest_input(raw_history, input_raw_exog, artifacts, cfg
         raise ValueError(
             f"Periode input harus dimulai dari bulan setelah data historis terakhir, yaitu {required_input_month.strftime('%Y-%m')}."
         )
+
     expected_input_months = month_range(required_input_month, len(input_months))
     if not input_months.equals(expected_input_months):
         raise ValueError("Periode input harus berurutan tanpa ada bulan yang terlewat.")
+
     input_target_series = None
     if input_raw_target is not None:
         input_target_series = pd.Series(input_raw_target).copy().sort_index()
@@ -398,38 +533,46 @@ def predict_hybrid_from_latest_input(raw_history, input_raw_exog, artifacts, cfg
             raise ValueError("TWP90 aktual wajib diisi untuk seluruh periode input sebelum bulan target.")
         if (input_target_series.reindex(input_months) <= 0).any():
             raise ValueError("TWP90 aktual harus lebih besar dari 0 untuk seluruh periode input.")
+
     selected_input_month = input_months[-1]
     forecast_horizon = get_forecast_horizon(cfg, artifacts)
     target_month = (selected_input_month.to_period("M") + forecast_horizon).to_timestamp("M")
     first_model_forecast_month = required_input_month
     internal_horizon = target_month.to_period("M").ordinal - first_model_forecast_month.to_period("M").ordinal + 1
     forecast_months = month_range(first_model_forecast_month, internal_horizon)
+
     differencing_orders = artifacts.get("differencing_orders_exog") or cfg.get("differencing_orders_exog")
     exog_lags_config = artifacts.get("exog_lags_config") or cfg.get("exog_lags_config")
     if not differencing_orders or not exog_lags_config:
         raise ValueError("Config differencing atau lag eksogen tidak ditemukan pada artifact.")
     ensure_raw_history_has_required_exog(raw_history, differencing_orders)
+
     future_raw = input_raw_exog.copy()
     if input_target_series is not None:
         future_raw[target_col] = input_target_series.reindex(future_raw.index)
     raw_all = pd.concat([raw_history.copy(), future_raw], axis=0).sort_index()
     raw_all = raw_all[~raw_all.index.duplicated(keep="last")]
+
     stationary = prepare_stationary_exog_from_raw(raw_all, differencing_orders)
     missing_forecast_rows = [m for m in forecast_months if m not in stationary.index]
     if missing_forecast_rows:
         stationary = pd.concat([stationary, pd.DataFrame(index=pd.DatetimeIndex(missing_forecast_rows))], axis=0).sort_index()
+
     features = build_features_from_stationary(stationary, exog_lags_config)
     feature_rows = features.loc[forecast_months]
+
     sarimax_cols = artifacts.get("exog_cols_sarimax") or cfg.get("sarimax_exog_cols", [])
     xgb_final_cols = artifacts.get("final_xgb_feature_cols") or cfg.get("xgb_final_feature_cols", [])
     residual_target = artifacts.get("residual_target") or cfg.get("residual_target", RESIDUAL_TARGET_DEFAULT)
     residual_feature_cols = artifacts.get("residual_feature_cols") or cfg.get("residual_feature_cols", [])
     target_lags = artifacts.get("target_lags") or cfg.get("target_lags", [1, 3, 6])
     xgb_base_cols = artifacts.get("xgb_base_cols") or cfg.get("xgb_base_cols") or derive_xgb_base_cols_from_final(xgb_final_cols, residual_feature_cols)
+
     if not sarimax_cols:
         raise ValueError("Daftar fitur SARIMAX tidak ditemukan pada artifact/config.")
     if not xgb_base_cols or not xgb_final_cols:
         raise ValueError("Daftar fitur XGBoost tidak ditemukan pada artifact/config.")
+
     X_sarimax = feature_rows.reindex(columns=sarimax_cols).astype(float)
     X_xgb_base = feature_rows.reindex(columns=xgb_base_cols).astype(float)
 
@@ -439,17 +582,21 @@ def predict_hybrid_from_latest_input(raw_history, input_raw_exog, artifacts, cfg
     if X_xgb_base.isna().any().any():
         missing = X_xgb_base.columns[X_xgb_base.isna().any()].tolist()
         raise ValueError(f"Fitur XGBoost dasar belum lengkap: {missing}")
+
     sarimax_model = copy.deepcopy(artifacts["final_sarimax"])
     model_library = artifacts.get("model_library_sarimax", cfg.get("model_library_sarimax", "pmdarima.ARIMA"))
     residual_history = pd.Series(artifacts["final_residual_train_log"]).copy()
     residual_history.index = pd.to_datetime(residual_history.index).to_period("M").to_timestamp("M")
     residual_history.name = residual_target
+
     rows = []
     xgb_feature_rows = []
     use_log_target = artifacts.get("use_log_target", cfg.get("use_log_target", True))
+
     for idx in forecast_months:
         X_sarimax_row = X_sarimax.loc[[idx]]
         X_xgb_base_row = X_xgb_base.loc[[idx]]
+
         sarimax_pred_log = _predict_sarimax_one_step(sarimax_model, X_sarimax_row, model_library)
         xgb_resid_pred_log, xgb_row = _predict_xgb_residual_one_step(
             artifacts["final_xgb"],
@@ -461,6 +608,7 @@ def predict_hybrid_from_latest_input(raw_history, input_raw_exog, artifacts, cfg
             target_lags,
         )
         xgb_feature_rows.append(xgb_row)
+
         hybrid_log = sarimax_pred_log + xgb_resid_pred_log
         if use_log_target:
             sarimax_original = float(np.exp(sarimax_pred_log))
@@ -468,10 +616,12 @@ def predict_hybrid_from_latest_input(raw_history, input_raw_exog, artifacts, cfg
         else:
             sarimax_original = float(sarimax_pred_log)
             hybrid_original = float(hybrid_log)
+
         actual_original = np.nan
         actual_log = np.nan
         actual_residual_log = np.nan
         source_note = "Target prediksi"
+
         if input_target_series is not None and idx in input_target_series.index:
             actual_original = float(input_target_series.loc[idx])
             actual_log = float(np.log(actual_original)) if use_log_target else actual_original
@@ -481,6 +631,7 @@ def predict_hybrid_from_latest_input(raw_history, input_raw_exog, artifacts, cfg
             source_note = "Aktual TWP90 input"
         else:
             residual_history.loc[idx] = xgb_resid_pred_log
+
         rows.append({
             "Month": idx,
             "Input_Month": selected_input_month,
@@ -493,58 +644,73 @@ def predict_hybrid_from_latest_input(raw_history, input_raw_exog, artifacts, cfg
             "Residual_Aktual_SARIMAX_Log": actual_residual_log,
             "Sumber_TWP90": source_note,
         })
+
     X_xgb_final_used = pd.concat(xgb_feature_rows, axis=0) if xgb_feature_rows else pd.DataFrame()
     internal_result = pd.DataFrame(rows)
     internal_result["Prediksi_TWP90_%"] = internal_result["Prediksi_Hybrid_Original"] * 100
     internal_result["Aktual_TWP90_Input_%"] = internal_result["Aktual_TWP90_Input_Original"] * 100
     internal_result["Error_Hybrid_pp"] = internal_result["Prediksi_TWP90_%"] - internal_result["Aktual_TWP90_Input_%"]
     internal_result["Abs_Error_Hybrid_pp"] = internal_result["Error_Hybrid_pp"].abs()
+
     orange = cfg.get("threshold_orange", artifacts.get("threshold_orange", 0.04))
     red = cfg.get("threshold_red", artifacts.get("threshold_red", 0.05))
     internal_result[["Status", "Warna", "Keterangan"]] = internal_result["Prediksi_Hybrid_Original"].apply(
         lambda x: pd.Series(classify_risk(x, orange, red))
     )
+
     return internal_result, X_sarimax, X_xgb_base, X_xgb_final_used, feature_rows, raw_all, internal_result
+
+
 def predict_hybrid_future(raw_history, future_raw_exog, artifacts, cfg):
     future_months = pd.DatetimeIndex(future_raw_exog.index).sort_values()
     if len(future_months) == 0:
         raise ValueError("Minimal harus ada satu bulan prediksi.")
+
     last_observed = normalize_month_end(cfg.get("last_observed_month", raw_history.index.max()))
     required_first = (last_observed.to_period("M") + 1).to_timestamp("M")
     if future_months[0] != required_first:
         raise ValueError(
             f"Prediksi harus dimulai dari bulan setelah data historis terakhir, yaitu {required_first.strftime('%Y-%m')}."
         )
+
     expected_months = month_range(required_first, len(future_months))
     if not future_months.equals(expected_months):
         raise ValueError("Bulan prediksi harus berurutan tanpa ada bulan yang terlewat.")
+
     raw_all = pd.concat([raw_history.copy(), future_raw_exog.copy()], axis=0).sort_index()
     raw_all = raw_all[~raw_all.index.duplicated(keep="last")]
+
     differencing_orders = artifacts.get("differencing_orders_exog") or cfg.get("differencing_orders_exog")
     exog_lags_config = artifacts.get("exog_lags_config") or cfg.get("exog_lags_config")
     if not differencing_orders or not exog_lags_config:
         raise ValueError("Config differencing atau lag eksogen tidak ditemukan pada artifact.")
+
     stationary = prepare_stationary_exog_from_raw(raw_all, differencing_orders)
     features = build_features_from_stationary(stationary, exog_lags_config)
     feature_rows = features.loc[future_months]
+
     sarimax_cols = artifacts.get("exog_cols_sarimax") or cfg.get("sarimax_exog_cols", [])
     xgb_final_cols = artifacts.get("final_xgb_feature_cols") or cfg.get("xgb_final_feature_cols", [])
     residual_target = artifacts.get("residual_target") or cfg.get("residual_target", RESIDUAL_TARGET_DEFAULT)
     residual_feature_cols = artifacts.get("residual_feature_cols") or cfg.get("residual_feature_cols", [])
     target_lags = artifacts.get("target_lags") or cfg.get("target_lags", [1, 3, 6])
     xgb_base_cols = artifacts.get("xgb_base_cols") or artifacts.get("xgb_base_cols") or derive_xgb_base_cols_from_final(xgb_final_cols, residual_feature_cols)
+
     if not sarimax_cols:
         raise ValueError("Daftar fitur SARIMAX tidak ditemukan pada artifact/config.")
     if not xgb_base_cols or not xgb_final_cols:
         raise ValueError("Daftar fitur XGBoost tidak ditemukan pada artifact/config.")
+
     X_sarimax = feature_rows.reindex(columns=sarimax_cols).astype(float)
     X_xgb_base = feature_rows.reindex(columns=xgb_base_cols).astype(float)
+
     if X_sarimax.isna().any().any():
         missing = X_sarimax.columns[X_sarimax.isna().any()].tolist()
         raise ValueError(f"Fitur SARIMAX belum lengkap: {missing}")
     if X_xgb_base.isna().any().any():
         missing = X_xgb_base.columns[X_xgb_base.isna().any()].tolist()
         raise ValueError(f"Fitur XGBoost dasar belum lengkap: {missing}")
+
     sarimax_model = artifacts["final_sarimax"]
     horizon = len(future_months)
     model_library = artifacts.get("model_library_sarimax", cfg.get("model_library_sarimax", "pmdarima.ARIMA"))
@@ -554,6 +720,7 @@ def predict_hybrid_future(raw_history, future_raw_exog, artifacts, cfg):
         sarimax_pred = sarimax_model.forecast(steps=horizon, exog=X_sarimax)
     else:
         sarimax_pred = sarimax_model.predict(n_periods=horizon, X=X_sarimax)
+
     sarimax_pred_log = pd.Series(np.asarray(sarimax_pred, dtype=float).reshape(-1), index=future_months, name="Prediksi_SARIMAX_Log")
     xgb_resid_log, X_xgb_final_used = predict_xgb_residual_recursive(
         artifacts["final_xgb"],
@@ -564,6 +731,7 @@ def predict_hybrid_future(raw_history, future_raw_exog, artifacts, cfg):
         residual_feature_cols,
         target_lags,
     )
+
     hybrid_log = (sarimax_pred_log + xgb_resid_log).rename("Prediksi_Hybrid_Log")
     if artifacts.get("use_log_target", cfg.get("use_log_target", True)):
         hybrid_original = np.exp(hybrid_log)
@@ -584,8 +752,13 @@ def predict_hybrid_future(raw_history, future_raw_exog, artifacts, cfg):
     result[["Status", "Warna", "Keterangan"]] = result["Prediksi_Hybrid_Original"].apply(
         lambda x: pd.Series(classify_risk(x, orange, red))
     )
+
     return result, X_sarimax, X_xgb_base, X_xgb_final_used, feature_rows, raw_all
+
+
 TEST_PREDICTIONS_PATH = resolve_artifact_path("test_predictions_hybrid.csv")
+
+
 @st.cache_data(show_spinner=False)
 def load_test_predictions():
     if not os.path.exists(TEST_PREDICTIONS_PATH):
@@ -599,17 +772,22 @@ def load_test_predictions():
     if "Month" in df.columns:
         df = df.sort_values("Month")
     return df
+
+
 def find_first_existing(columns, candidates):
     for candidate in candidates:
         if candidate in columns:
             return candidate
     return None
+
+
 def prepare_evaluation_frame(test_predictions, dashboard_history, target_col):
     candidates = []
     if test_predictions is not None and not test_predictions.empty:
         candidates.append(("test_predictions_hybrid.csv", test_predictions.copy()))
     if dashboard_history is not None and not dashboard_history.empty:
         candidates.append(("dashboard_twp90_history.csv", dashboard_history.copy()))
+
     actual_candidates = [
         "Actual_Original",
         "Actual",
@@ -626,6 +804,7 @@ def prepare_evaluation_frame(test_predictions, dashboard_history, target_col):
         "Prediction",
         "Prediksi_TWP90_Original",
     ]
+
     for source_name, df in candidates:
         actual_col = find_first_existing(df.columns, actual_candidates)
         pred_col = find_first_existing(df.columns, pred_candidates)
@@ -641,17 +820,22 @@ def prepare_evaluation_frame(test_predictions, dashboard_history, target_col):
                 out["Source"] = source_name
                 return out
     return pd.DataFrame()
+
+
 def evaluation_metrics(eval_df):
     if eval_df is None or eval_df.empty:
         return {}, pd.DataFrame(), 100.0
+
     df = eval_df.copy()
     max_value = max(df["Actual"].abs().max(), df["Predicted"].abs().max())
     scale = 100.0 if pd.notna(max_value) and max_value <= 1.5 else 1.0
+
     df["Actual_%"] = df["Actual"] * scale
     df["Predicted_%"] = df["Predicted"] * scale
     df["Error_pp"] = df["Predicted_%"] - df["Actual_%"]
     df["Abs_Error_pp"] = df["Error_pp"].abs()
     nonzero = df["Actual_%"].abs() > 1e-12
+
     mae = float(df["Abs_Error_pp"].mean())
     rmse = float(np.sqrt((df["Error_pp"] ** 2).mean()))
     mape = float((df.loc[nonzero, "Abs_Error_pp"] / df.loc[nonzero, "Actual_%"].abs()).mean() * 100) if nonzero.any() else np.nan
@@ -664,16 +848,29 @@ def evaluation_metrics(eval_df):
         "N": int(len(df)),
         "Source": str(df["Source"].iloc[0]) if "Source" in df.columns else "-",
     }, df, scale
+
+
 def prepare_prediction_input_evaluation_frame(payload):
+    """Membentuk tambahan data evaluasi dari hasil prediksi terbaru user.
+
+    Data ini tidak menggantikan evaluasi historis. Baris dari user akan
+    ditambahkan ke data evaluasi history/artifact, lalu metrik dihitung ulang
+    dari seluruh observasi gabungan. Nilai Actual dan Predicted disimpan pada
+    skala original/desimal model agar konsisten dengan data history.
+    """
     if not isinstance(payload, dict) or "result" not in payload:
         return pd.DataFrame()
+
     result = payload.get("result")
     if result is None or not isinstance(result, pd.DataFrame) or result.empty:
         return pd.DataFrame()
+
     if "Month" not in result.columns:
         return pd.DataFrame()
+
     out = pd.DataFrame()
     out["Month"] = pd.to_datetime(result["Month"], errors="coerce").dt.to_period("M").dt.to_timestamp("M")
+
     # Utamakan kolom original/desimal. Jika tidak ada, fallback dari kolom persen dibagi 100.
     if {"Aktual_TWP90_Input_Original", "Prediksi_Hybrid_Original"}.issubset(set(result.columns)):
         out["Actual"] = pd.to_numeric(result["Aktual_TWP90_Input_Original"], errors="coerce")
@@ -683,15 +880,21 @@ def prepare_prediction_input_evaluation_frame(payload):
         out["Predicted"] = pd.to_numeric(result["Prediksi_TWP90_%"], errors="coerce") / 100.0
     else:
         return pd.DataFrame()
+
     # Baris target yang belum punya TWP90 aktual tidak dihitung dalam evaluasi.
     out = out.dropna(subset=["Month", "Actual", "Predicted"])
     if out.empty:
         return pd.DataFrame()
+
     out = out[["Month", "Actual", "Predicted"]].copy()
     out["Source"] = "Input user"
     return out
+
+
 def combine_history_and_user_evaluation(default_eval_raw, user_eval_raw):
+    """Gabungkan evaluasi historis dengan tambahan observasi dari input user."""
     frames = []
+
     if default_eval_raw is not None and isinstance(default_eval_raw, pd.DataFrame) and not default_eval_raw.empty:
         history_part = default_eval_raw.copy()
         if "Source" not in history_part.columns:
@@ -700,11 +903,13 @@ def combine_history_and_user_evaluation(default_eval_raw, user_eval_raw):
             history_part["Source"] = history_part["Source"].fillna("History/artifact")
         history_part["Eval_Order"] = 0
         frames.append(history_part)
+
     if user_eval_raw is not None and isinstance(user_eval_raw, pd.DataFrame) and not user_eval_raw.empty:
         user_part = user_eval_raw.copy()
         user_part["Source"] = "Input user"
         user_part["Eval_Order"] = 1
         frames.append(user_part)
+
     if not frames:
         return pd.DataFrame()
 
@@ -712,6 +917,7 @@ def combine_history_and_user_evaluation(default_eval_raw, user_eval_raw):
     combined["Actual"] = pd.to_numeric(combined["Actual"], errors="coerce")
     combined["Predicted"] = pd.to_numeric(combined["Predicted"], errors="coerce")
     combined = combined.dropna(subset=["Actual", "Predicted"]).copy()
+
     if "Month" in combined.columns:
         combined["Month"] = pd.to_datetime(combined["Month"], errors="coerce").dt.to_period("M").dt.to_timestamp("M")
         combined = combined.sort_values(["Month", "Eval_Order"]).copy()
@@ -719,15 +925,21 @@ def combine_history_and_user_evaluation(default_eval_raw, user_eval_raw):
         combined = combined.drop_duplicates(subset=["Month"], keep="last")
     else:
         combined = combined.sort_values("Eval_Order").copy()
+
     combined = combined.drop(columns=["Eval_Order"], errors="ignore")
     return combined
+
+
 def get_active_evaluation_dataset(default_eval_raw):
+    """Hitung evaluasi dari data history ditambah data input user terbaru."""
     user_eval_raw = prepare_prediction_input_evaluation_frame(st.session_state.get("prediction_payload"))
     combined_eval_raw = combine_history_and_user_evaluation(default_eval_raw, user_eval_raw)
+
     if not combined_eval_raw.empty:
         summary, detail, scale = evaluation_metrics(combined_eval_raw)
         history_n = 0 if default_eval_raw is None or default_eval_raw.empty else len(default_eval_raw.dropna(subset=["Actual", "Predicted"]))
         user_n = 0 if user_eval_raw is None or user_eval_raw.empty else len(user_eval_raw.dropna(subset=["Actual", "Predicted"]))
+
         if user_n > 0 and history_n > 0:
             summary["Source"] = f"History + input user ({history_n} + {user_n} observasi)"
             return summary, detail, scale, "history_plus_user"
@@ -736,7 +948,10 @@ def get_active_evaluation_dataset(default_eval_raw):
             return summary, detail, scale, "user_prediction"
         summary["Source"] = summary.get("Source", "History/artifact")
         return summary, detail, scale, "artifact_history"
+
     return {}, pd.DataFrame(), 100.0, "no_data"
+
+
 def value_card(label, value, note="", accent="#1d4ed8"):
     return f"""
     <div class="value-card" style="border-top:4px solid {accent};">
@@ -745,7 +960,10 @@ def value_card(label, value, note="", accent="#1d4ed8"):
         <div class="metric-note">{note}</div>
     </div>
     """
+
+
 def clean_undefined_strings(df):
+    """Menghapus nilai teks undefined/null dengan menggantinya menjadi string kosong."""
     out = df.copy()
     text_cols = out.select_dtypes(include=["object", "string"]).columns
     for col in text_cols:
@@ -759,16 +977,23 @@ def clean_undefined_strings(df):
             "-": ""
         }).fillna("")
     return out
+
+
 def round_numeric_display(df, digits=2):
+    """Membulatkan seluruh kolom angka untuk tampilan tabel dan file unduhan."""
     out = df.copy()
     numeric_cols = out.select_dtypes(include=[np.number]).columns
     if len(numeric_cols) > 0:
         out[numeric_cols] = out[numeric_cols].round(int(digits))
     return out
+
+
 def _html_text(value):
     if pd.isna(value):
         return ""
     return escape(str(value))
+
+
 def _progress_html(value, max_value, suffix="%"):
     value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.isna(value):
@@ -782,11 +1007,15 @@ def _progress_html(value, max_value, suffix="%"):
         <div class="progress-track"><div class="progress-fill" style="width:{width:.2f}%;"></div></div>
     </div>
     """
+
+
 def _number_html(value, digits=2, suffix=""):
     value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.isna(value):
         return ""
     return f"{float(value):.{digits}f}{escape(str(suffix))}"
+
+
 def _status_badge_html(status):
     status_text = _html_text(status).upper()
     css_class = "status-aman"
@@ -795,6 +1024,7 @@ def _status_badge_html(status):
     elif status_text == "BAHAYA":
         css_class = "status-bahaya"
     return f'<span class="status-badge {css_class}">{status_text}</span>'
+
 
 def render_modern_blue_table(
     table,
@@ -805,17 +1035,20 @@ def render_modern_blue_table(
     suffix_map=None,
     height=460,
 ):
+    """Render tabel custom bertema biru agar semua menu konsisten dengan tabel dashboard."""
     table = clean_undefined_strings(table.copy())
     progress_cols = list(progress_cols or [])
     delta_cols = list(delta_cols or [])
     status_cols = list(status_cols or ["Status Risiko", "Status"])
     suffix_map = suffix_map or {}
+
     if numeric_cols is None:
         numeric_cols = []
         for col in table.columns:
             converted = pd.to_numeric(table[col], errors="coerce")
             if converted.notna().any() and col not in progress_cols and col not in delta_cols:
                 numeric_cols.append(col)
+
     max_values = {}
     for col in progress_cols:
         if col in table.columns:
@@ -824,6 +1057,7 @@ def render_modern_blue_table(
                 max_values[col] = max(1.0, float(numeric_values.max()) + 1)
             else:
                 max_values[col] = 1.0
+
     header_html = "".join(f"<th>{escape(str(col))}</th>" for col in table.columns)
     body_rows = []
     for _, row in table.iterrows():
@@ -837,12 +1071,14 @@ def render_modern_blue_table(
                 cls = "delta-pos" if pd.notna(delta) and float(delta) >= 0 else "delta-neg"
                 display = "" if pd.isna(delta) else f"{float(delta):.2f}"
                 cells.append(f'<td><span class="{cls}">{display}</span></td>')
-            elif col in status_cols:                cells.append(f"<td>{_status_badge_html(value)}</td>")
+            elif col in status_cols:
+                cells.append(f"<td>{_status_badge_html(value)}</td>")
             elif col in numeric_cols:
                 cells.append(f"<td>{_number_html(value, suffix=suffix_map.get(col, ''))}</td>")
             else:
                 cells.append(f"<td>{_html_text(value)}</td>")
         body_rows.append("<tr>" + "".join(cells) + "</tr>")
+
     table_html = f"""
     <div class="blue-table-shell">
         <div class="blue-table-scroll" style="max-height:{int(height)}px;">
@@ -854,6 +1090,8 @@ def render_modern_blue_table(
     </div>
     """
     st.markdown(table_html, unsafe_allow_html=True)
+
+
 def render_modern_history_table(table):
     progress_cols = [c for c in ["TWP90 Aktual (%)", "Prediksi Hybrid (%)", "Prediksi TWP90 (%)"] if c in table.columns]
     delta_cols = [c for c in ["Selisih (pp)"] if c in table.columns]
@@ -865,11 +1103,15 @@ def render_modern_history_table(table):
         suffix_map={c: "%" for c in progress_cols},
         height=460,
     )
+
+
 def rerun_dashboard():
     if hasattr(st, "rerun"):
         st.rerun()
     elif hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
+
+
 def input_step_for_column(col, percent_cols):
     if col in percent_cols:
         return 0.01
@@ -881,12 +1123,17 @@ def input_step_for_column(col, percent_cols):
     if "pdb" in label or "outstanding" in label:
         return 1000.0
     return 1.0
+
+
 def validate_required_prediction_inputs(input_df, exog_cols, percent_cols, target_input_col=None):
+    """Validasi form prediksi: seluruh input wajib diisi dan nilai 0 dianggap belum diisi."""
     if input_df is None or input_df.empty:
         raise ValueError("Hasil prediksi tidak ditemukan. Form input wajib diisi terlebih dahulu.")
+
     required_cols = list(exog_cols)
     if target_input_col:
         required_cols = [target_input_col] + required_cols
+
     missing_columns = [col for col in required_cols if col not in input_df.columns]
     if missing_columns:
         shown_missing = ["TWP90 aktual (%)" if col == target_input_col else make_display_name(col, percent_cols) for col in missing_columns]
@@ -894,8 +1141,10 @@ def validate_required_prediction_inputs(input_df, exog_cols, percent_cols, targe
             "Hasil prediksi tidak ditemukan. Kolom input belum lengkap: "
             + ", ".join(shown_missing)
         )
+
     numeric_values = input_df[required_cols].apply(pd.to_numeric, errors="coerce")
     invalid_mask = numeric_values.isna() | (numeric_values.abs() <= 1e-12)
+
     if invalid_mask.any().any():
         detail_rows = []
         for idx, row in invalid_mask.iterrows():
@@ -908,14 +1157,19 @@ def validate_required_prediction_inputs(input_df, exog_cols, percent_cols, targe
                 ]
                 extra = "" if len(invalid_cols) <= 3 else f" dan {len(invalid_cols) - 3} kolom lain"
                 detail_rows.append(f"{period}: {', '.join(shown_cols)}{extra}")
+
         detail_text = "; ".join(detail_rows[:5])
         if len(detail_rows) > 5:
             detail_text += f"; dan {len(detail_rows) - 5} periode lain"
+
         raise ValueError(
             "Hasil prediksi tidak ditemukan. Seluruh form input wajib diisi dan nilai 0 dianggap belum diisi. "
             f"Periksa kembali input berikut: {detail_text}."
         )
+
+
 def format_feature_label(feature_name):
+    """Membuat nama fitur teknis menjadi lebih mudah dibaca pada grafik evaluasi."""
     feature_name = str(feature_name)
     replacements = {
         "Residual_SARIMAX_Log": "Residual SARIMAX log",
@@ -937,19 +1191,25 @@ def format_feature_label(feature_name):
     for old, new in replacements.items():
         label = label.replace(old, new)
     return " ".join(label.split())
+
+
 def get_hybrid_feature_importance(artifacts, cfg, top_n=20):
+    """Mengambil feature importance dari komponen XGBoost residual pada model hybrid."""
     model = artifacts.get("final_xgb")
     feature_cols = artifacts.get("final_xgb_feature_cols") or cfg.get("xgb_final_feature_cols") or []
     if model is None:
         return pd.DataFrame()
+
     importance_values = None
     importance_type = "gain"
+
     if hasattr(model, "feature_importances_"):
         try:
             importance_values = np.asarray(model.feature_importances_, dtype=float)
             importance_type = "feature_importances_"
         except Exception:
             importance_values = None
+
     if importance_values is not None and len(feature_cols) == len(importance_values):
         df = pd.DataFrame({"Feature": feature_cols, "Importance": importance_values})
     else:
@@ -970,17 +1230,22 @@ def get_hybrid_feature_importance(artifacts, cfg, top_n=20):
             df = pd.DataFrame(rows)
         except Exception:
             return pd.DataFrame()
+
     if df.empty:
         return pd.DataFrame()
+
     df["Importance"] = pd.to_numeric(df["Importance"], errors="coerce").fillna(0.0)
     df = df[df["Importance"] > 0].copy()
     if df.empty:
         return pd.DataFrame()
+
     total = df["Importance"].sum()
     df["Importance_%"] = (df["Importance"] / total * 100.0) if total > 0 else 0.0
     df["Feature_Label"] = df["Feature"].apply(format_feature_label)
     df["Importance_Type"] = importance_type
     return df.sort_values("Importance_%", ascending=False).head(int(top_n)).sort_values("Importance_%", ascending=True)
+
+
 def show_hybrid_feature_importance():
     importance_df = get_hybrid_feature_importance(artifacts, cfg, top_n=20)
     st.markdown('<div class="section-title">Feature Importance Model Hybrid</div>', unsafe_allow_html=True)
@@ -994,6 +1259,7 @@ def show_hybrid_feature_importance():
             unsafe_allow_html=True,
         )
         return
+
     fig_importance = go.Figure(go.Bar(
         x=importance_df["Importance_%"],
         y=importance_df["Feature_Label"],
@@ -1015,7 +1281,10 @@ def show_hybrid_feature_importance():
     )
     fig_importance.update_xaxes(range=[0, max(importance_df["Importance_%"].max() * 1.18, 1)])
     st.plotly_chart(fig_importance, use_container_width=True, config={"displayModeBar": False, "responsive": True})
+
     # Tabel feature importance dihapus sesuai permintaan; evaluasi hanya menampilkan grafik dan caption.
+
+
 try:
     cfg = load_config()
     artifacts = load_artifacts()
@@ -1041,10 +1310,17 @@ try:
 except Exception as init_error:
     st.error(f"Dashboard gagal memuat artifact: {init_error}")
     st.stop()
+
 last_observed = normalize_month_end(cfg.get("last_observed_month", raw_history.index.max()))
 next_month = (last_observed.to_period("M") + 1).to_timestamp("M")
 DASHBOARD_FORECAST_HORIZON = get_forecast_horizon(cfg, artifacts)
 target_output_month = (next_month.to_period("M") + DASHBOARD_FORECAST_HORIZON).to_timestamp("M")
+
+# Batas kalender prediksi dibuat berbasis tahun, bukan hanya 12 bulan setelah data terakhir.
+# Default lama `dashboard_max_selectable_months = 12` membuat pilihan target berhenti di 2026
+# ketika data historis terakhir adalah Desember 2025. Dengan blok ini, user bisa memilih
+# periode lintas tahun. Ubah `dashboard_max_target_year` di preprocessing_config.json
+# jika ingin menentukan tahun maksimum secara eksplisit.
 try:
     LEGACY_MAX_SELECTABLE_MONTHS = max(
         1,
@@ -1060,6 +1336,7 @@ try:
     )
 except Exception:
     DASHBOARD_MAX_SELECTABLE_YEARS = 10
+
 try:
     DASHBOARD_MAX_TARGET_YEAR = int(
         cfg.get(
@@ -1069,20 +1346,25 @@ try:
     )
 except Exception:
     DASHBOARD_MAX_TARGET_YEAR = last_observed.year + DASHBOARD_MAX_SELECTABLE_YEARS
+
 DASHBOARD_MAX_TARGET_YEAR = max(DASHBOARD_MAX_TARGET_YEAR, target_output_month.year)
 max_target_month = pd.Timestamp(year=DASHBOARD_MAX_TARGET_YEAR, month=12, day=1).to_period("M").to_timestamp("M")
 max_input_month = (max_target_month.to_period("M") - DASHBOARD_FORECAST_HORIZON).to_timestamp("M")
+
 MONTHS_UNTIL_MAX_TARGET = (
     max_input_month.to_period("M").ordinal - next_month.to_period("M").ordinal + 1
 )
 MAX_FORECAST_MONTHS = max(1, LEGACY_MAX_SELECTABLE_MONTHS, MONTHS_UNTIL_MAX_TARGET)
+
 available_input_months = month_range(next_month, MAX_FORECAST_MONTHS)
 available_target_months = pd.DatetimeIndex([
     (month.to_period("M") + DASHBOARD_FORECAST_HORIZON).to_timestamp("M")
     for month in available_input_months
 ])
+
 last_actual = raw_history[target_col].dropna().iloc[-1]
 last_actual_pct = to_percent_display(last_actual)
+
 latest_history_pred_pct = None
 latest_history_pred_month = None
 if not history.empty and "Prediksi_Hybrid_Original" in history.columns:
@@ -1091,12 +1373,14 @@ if not history.empty and "Prediksi_Hybrid_Original" in history.columns:
         pred_hist = pred_hist.sort_values("Month")
         latest_history_pred_pct = to_percent_display(pred_hist["Prediksi_Hybrid_Original"].iloc[-1])
         latest_history_pred_month = pred_hist["Month"].iloc[-1]
+
 active_eval_summary, active_eval_detail, active_eval_scale, active_eval_source = get_active_evaluation_dataset(eval_raw)
 mape_value = active_eval_summary.get("MAPE_%") if active_eval_summary else np.nan
 mape_text = "-" if pd.isna(mape_value) else f"{mape_value:.2f}%"
 RISK_ORANGE, RISK_RED = get_risk_thresholds(cfg, artifacts)
 RISK_ORANGE_PCT = RISK_ORANGE * 100
 RISK_RED_PCT = RISK_RED * 100
+
 st.markdown(
     """
 <style>
@@ -1119,6 +1403,7 @@ st.markdown(
         linear-gradient(180deg,#f4f9ff 0%, #eaf4ff 100%);
 }
 .block-container {padding-top:2.15rem; padding-bottom:2.75rem; max-width:1320px;}
+
 /* Sidebar sesuai referensi: compact, modern, tanpa emoji */
 [data-testid="stSidebar"] {
     background:
@@ -1130,6 +1415,7 @@ st.markdown(
 [data-testid="stSidebar"] * {color:#f8fafc !important;}
 [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {padding:1.45rem 1.35rem 1.5rem 1.35rem;}
 [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {gap:.72rem;}
+
 .sidebar-brand {
     min-height:158px;
     display:flex;
@@ -1163,6 +1449,7 @@ st.markdown(
     margin:20px 0 0 0;
     background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.22),rgba(255,255,255,0));
 }
+
 /* Tombol navigasi sidebar dibuat seperti kartu pada contoh */
 [data-testid="stSidebar"] div.stButton > button {
     width:100%;
@@ -1187,6 +1474,7 @@ st.markdown(
     transform:translateY(-1px);
     color:#ffffff !important;
 }
+
 .hero {
     position:relative; overflow:hidden; color:white; border-radius:32px; padding:42px 38px 38px 38px;
     min-height:156px;
@@ -1198,6 +1486,7 @@ st.markdown(
 .hero-title {position:relative; font-size:42px; line-height:1.18; font-weight:1000; margin:0 0 10px 0; letter-spacing:-.04em; padding-top:2px; text-transform:none;}
 .badge-row {position:relative; display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;}
 .badge {background:rgba(255,255,255,.15); border:1px solid rgba(255,255,255,.28); color:white; border-radius:999px; padding:8px 13px; font-size:12px; font-weight:800; backdrop-filter:blur(10px);}
+
 .panel, .value-card, .result-panel, .input-panel {
     background:rgba(255,255,255,.98); border:1px solid #d7e7ff; border-radius:24px;
     box-shadow:0 14px 34px rgba(30,64,175,.06); padding:20px 22px;
@@ -1231,6 +1520,7 @@ div.stButton > button, div.stDownloadButton > button, div.stFormSubmitButton > b
     box-shadow:0 14px 28px rgba(15,42,95,.24) !important;
 }
 div.stButton > button:hover, div.stDownloadButton > button:hover, div.stFormSubmitButton > button:hover {filter:brightness(1.05); transform:translateY(-1px);}
+
 /* Form Input & Element Interaktif */
 [data-testid="stNumberInput"] input {
     border-radius:14px !important; border:1px solid #bfdbfe !important; background:#ffffff !important;
@@ -1263,9 +1553,11 @@ div.stButton > button:hover, div.stDownloadButton > button:hover, div.stFormSubm
     border-radius:999px; background:#e0ecff; color:#1e3a8a; font-weight:900; padding:8px 14px;
 }
 .stTabs [aria-selected="true"] {background:linear-gradient(135deg,#1d4ed8,#38bdf8) !important; color:white !important;}
+
 /* Hapus teks judul plotly undefined dan modebar agar grafik bersih */
 [data-testid="stPlotlyChart"] .gtitle {display:none !important;}
 [data-testid="stPlotlyChart"] .modebar-container {display:none !important;}
+
 /* Desain Tabel Modern Tema Biru */
 [data-testid="stDataFrame"] {
     border: 1px solid #cce0ff !important; border-radius: 16px !important; overflow: hidden !important;
@@ -1277,6 +1569,7 @@ div.stButton > button:hover, div.stDownloadButton > button:hover, div.stFormSubm
 [data-testid="stDataFrame"] div[role="gridcell"] {
     font-size: 13.5px !important; color: #0f2a5f !important;
 }
+
 .blue-table-shell{
     border:1px solid #c7ddff; border-radius:22px; overflow:hidden; background:#ffffff;
     box-shadow:0 16px 38px rgba(30,64,175,.10); margin-top:8px;
@@ -1322,6 +1615,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 # Menu telah diubah namanya
 MENU_ITEMS = {
     "Dashboard": "Dashboard",
@@ -1347,7 +1641,9 @@ with st.sidebar:
         if st.button(label, key=f"nav_{menu_key}", use_container_width=True):
             st.session_state["selected_menu"] = menu_key
             rerun_dashboard()
+
 selected_menu = st.session_state["selected_menu"]
+
 if selected_menu != "Evaluasi Model":
     summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
     with summary_col1:
@@ -1361,6 +1657,8 @@ if selected_menu != "Evaluasi Model":
         st.markdown(value_card("Evaluasi MAPE", mape_text, eval_note, "#2563eb"), unsafe_allow_html=True)
     with summary_col4:
         st.markdown(value_card("Data historis", f"{len(raw_history):,} bulan", f"Sampai {last_observed.strftime('%B %Y')}", "#1e3a8a"), unsafe_allow_html=True)
+
+
 def show_historical_chart():
     fig = go.Figure()
     if not history.empty and "Actual_Original" in history.columns:
@@ -1408,9 +1706,12 @@ def show_historical_chart():
         hovermode="x unified",
     )
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})
+
+
 def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
     summary = summary if summary is not None else eval_summary
     detail = detail if detail is not None else eval_detail
+
     if not summary or detail is None or detail.empty:
         st.markdown(
             """
@@ -1421,8 +1722,10 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
             unsafe_allow_html=True,
         )
         return
+
     current_mape = summary.get("MAPE_%")
     current_mape_text = "-" if pd.isna(current_mape) else f"{current_mape:.2f}%"
+
     e1, e2, e3, e4 = st.columns(4)
     with e1:
         st.markdown(value_card("MAE", f"{summary['MAE_pp']:.2f} pp", "Rata-rata selisih absolut"), unsafe_allow_html=True)
@@ -1432,6 +1735,7 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
         st.markdown(value_card("MAPE", current_mape_text, "Persentase rata-rata kesalahan absolut"), unsafe_allow_html=True)
     with e4:
         st.markdown(value_card("Observasi", f"{summary['N']}", summary["Source"]), unsafe_allow_html=True)
+
     eval_plot = detail.copy()
     fig_eval = go.Figure()
     fig_eval.add_trace(go.Scatter(
@@ -1463,6 +1767,7 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
         hovermode="x unified",
     )
     st.plotly_chart(fig_eval, use_container_width=True, config={"displayModeBar": False, "responsive": True})
+
     eval_table = eval_plot.copy()
     if "Month" in eval_table.columns and pd.api.types.is_datetime64_any_dtype(eval_table["Month"]):
         eval_table["Month"] = eval_table["Month"].dt.strftime("%Y-%m")
@@ -1480,6 +1785,7 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
         eval_table["Status Risiko"] = eval_table["Prediksi Hybrid (%)"].apply(
             lambda x: risk_status_from_percent(x, RISK_ORANGE, RISK_RED)
         )
+
     st.markdown('<div class="eval-table-title">Tabel Detail Evaluasi Aktual vs Prediksi</div>', unsafe_allow_html=True)
     eval_table = round_numeric_display(clean_undefined_strings(eval_table), 2)
     render_modern_blue_table(
@@ -1491,6 +1797,8 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
         suffix_map={"TWP90 Aktual (%)": "%", "Prediksi Hybrid (%)": "%", "Abs Error (pp)": "pp"},
         height=420,
     )
+
+
 def show_history_table():
     if not history.empty and "Actual_Original" in history.columns:
         table = history.copy()
@@ -1526,16 +1834,21 @@ def show_history_table():
         })
         table = table.rename(columns={target_col: "TWP90 Aktual (%)"})
         table = round_numeric_display(clean_undefined_strings(table), 2)
+
     render_modern_history_table(table)
+
+
 if selected_menu == "Dashboard":
     st.markdown('<div class="section-title" style="margin-top: 1rem;">Tren Historis TWP90</div>', unsafe_allow_html=True)
     show_historical_chart()
     st.markdown('<div class="section-title">Data Historis</div>', unsafe_allow_html=True)
     # Caption setelah judul data historis telah dihapus sesuai permintaan
     show_history_table()
+
 elif selected_menu == "Prediksi TWP90":
     st.markdown('<div class="section-title" style="margin-top: 1rem;">Prediksi TWP90</div>', unsafe_allow_html=True)
     horizon = DASHBOARD_FORECAST_HORIZON
+
     default_target_date = st.session_state.get(
         "prediction_target_date_persisted",
         to_date(available_target_months[0]),
@@ -1544,6 +1857,7 @@ elif selected_menu == "Prediksi TWP90":
         to_date(available_target_months[0]),
         min(default_target_date, to_date(available_target_months[-1])),
     )
+
     selected_target_date = st.date_input(
         "Pilih periode TWP90 yang ingin diprediksi",
         value=default_target_date,
@@ -1564,6 +1878,7 @@ elif selected_menu == "Prediksi TWP90":
             f"sampai {available_target_months[-1].strftime('%B %Y')}."
         )
         st.stop()
+
     input_month = (target_month.to_period("M") - horizon).to_timestamp("M")
     if input_month < next_month:
         st.error(
@@ -1571,6 +1886,7 @@ elif selected_menu == "Prediksi TWP90":
             f"harus {next_month.strftime('%B %Y')}."
         )
         st.stop()
+
     required_input_count = input_month.to_period("M").ordinal - next_month.to_period("M").ordinal + 1
     future_months = month_range(next_month, required_input_count)
     input_range_text = (
@@ -1583,6 +1899,7 @@ elif selected_menu == "Prediksi TWP90":
         if len(future_months) == 1
         else f"{future_months[0].strftime('%B %Y')} s.d. {target_month.strftime('%B %Y')}"
     )
+
     st.markdown(
         f"""
         <div class="info-box">
@@ -1594,6 +1911,7 @@ elif selected_menu == "Prediksi TWP90":
         """,
         unsafe_allow_html=True,
     )
+
     if len(future_months) > 1:
         st.markdown(
             f"""
@@ -1606,8 +1924,10 @@ elif selected_menu == "Prediksi TWP90":
             """,
             unsafe_allow_html=True,
         )
+
     editor_template = prepare_future_input_template(raw_history, future_months, exog_cols, percent_cols)
     current_signature = f"target_{target_month.strftime('%Y-%m')}_input_until_{input_month.strftime('%Y-%m')}_h{horizon}_n{len(future_months)}"
+
     cached_prediction_input = pd.DataFrame()
     cached_payload = st.session_state.get("prediction_payload")
     if isinstance(cached_payload, dict) and cached_payload.get("signature") == current_signature:
@@ -1616,6 +1936,7 @@ elif selected_menu == "Prediksi TWP90":
         cached_cache = st.session_state["prediction_input_cache"]
         if cached_cache.get("signature") == current_signature:
             cached_prediction_input = cached_cache.get("input_df", pd.DataFrame()).copy()
+
     def cached_input_value(month_value, column_name, fallback=None):
         # Form input default dibuat kosong. Jika cache kosong/invalid/0, tampilkan blank.
         if cached_prediction_input is None or cached_prediction_input.empty:
@@ -1628,6 +1949,7 @@ elif selected_menu == "Prediksi TWP90":
         if pd.isna(value) or abs(float(value)) <= 1e-12:
             return fallback
         return float(value)
+
     with st.form("prediction_form", clear_on_submit=False):
         input_rows = []
         for i, month in enumerate(future_months):
@@ -1650,8 +1972,10 @@ elif selected_menu == "Prediksi TWP90":
                     value=cached_input_value(month, TWP90_INPUT_COL, None),
                     step=0.01,
                     format="%.2f",
-                    help="Isi nilai TWP90 aktual periode input dalam angka persen asli. Contoh: 4,32% ditulis 4.32.",                    key=f"num_{current_signature}_{month_key}_{TWP90_INPUT_COL}",
+                    help="Isi nilai TWP90 aktual periode input dalam angka persen asli. Contoh: 4,32% ditulis 4.32.",
+                    key=f"num_{current_signature}_{month_key}_{TWP90_INPUT_COL}",
                 )
+
                 input_columns = st.columns(2)
                 template_row = editor_template.loc[editor_template["Month"] == month.strftime("%Y-%m")]
                 for j, col in enumerate(exog_cols):
@@ -1663,12 +1987,16 @@ elif selected_menu == "Prediksi TWP90":
                             value=default_value,
                             step=input_step_for_column(col, percent_cols),
                             format="%.2f",
-                            help=COLUMN_HELP.get(col, "Isi sesuai skala historis model."),                            key=f"num_{current_signature}_{month_key}_{col}",
+                            help=COLUMN_HELP.get(col, "Isi sesuai skala historis model."),
+                            key=f"num_{current_signature}_{month_key}_{col}",
                         )
                 input_rows.append(row)
+
         submitted = st.form_submit_button("Hitung Prediksi", use_container_width=True, type="primary")
+
     input_snapshot = pd.DataFrame(input_rows)
     current_value_signature = current_signature + "_" + str(pd.util.hash_pandas_object(input_snapshot, index=True).sum())
+
     if submitted:
         try:
             input_df = input_snapshot.copy()
@@ -1705,7 +2033,9 @@ elif selected_menu == "Prediksi TWP90":
             if "Hasil prediksi tidak ditemukan" not in error_message:
                 error_message = f"Prediksi gagal dihitung: {e}"
             st.error(error_message)
+
     payload = st.session_state.get("prediction_payload")
+
     if not payload or payload.get("signature") != current_signature or payload.get("value_signature") != current_value_signature:
         st.markdown(
             """
@@ -1719,7 +2049,9 @@ elif selected_menu == "Prediksi TWP90":
     else:
         result = payload["result"]
         input_df = payload["input_df"]
+
         latest_pred = result.iloc[-1]
+
         st.markdown('<div class="section-title">Ringkasan Hasil Prediksi</div>', unsafe_allow_html=True)
         c1, c2, c3, c4 = st.columns(4)
         with c1:
@@ -1730,9 +2062,11 @@ elif selected_menu == "Prediksi TWP90":
             st.markdown(value_card("Input aktual sampai", input_month.strftime("%B %Y"), f"{len(future_months)} bulan input", "#0ea5e9"), unsafe_allow_html=True)
         with c4:
             st.markdown(value_card("Status periode target", latest_pred["Status"], latest_pred["Keterangan"], latest_pred["Warna"]), unsafe_allow_html=True)
+
         selected_row = latest_pred
         selected_status_color = selected_row["Warna"]
         selected_month_text = selected_row["Month"].strftime("%B %Y")
+
         detail_col1, detail_col2 = st.columns([1.25, 1])
         with detail_col1:
             st.markdown(
@@ -1770,7 +2104,9 @@ elif selected_menu == "Prediksi TWP90":
                 """,
                 unsafe_allow_html=True,
             )
+
         tab_hasil, tab_grafik = st.tabs(["Hasil prediksi", "Grafik tren"])
+
         with tab_hasil:
             st.markdown('<div class="modern-table-title">Tabel Hasil Prediksi Berantai</div>', unsafe_allow_html=True)
             display_result = result[[
@@ -1831,10 +2167,12 @@ elif selected_menu == "Prediksi TWP90":
             csv_download = display_result.to_csv(index=False).encode("utf-8")
             st.download_button(
                 "Download hasil prediksi CSV",
-                data=csv_download,                file_name=f"hasil_prediksi_twp90_target_{target_month.strftime('%Y%m')}.csv",
+                data=csv_download,
+                file_name=f"hasil_prediksi_twp90_target_{target_month.strftime('%Y%m')}.csv",
                 mime="text/csv",
                 use_container_width=True,
             )
+
         with tab_grafik:
             fig = go.Figure()
             if not history.empty and "Actual_Original" in history.columns:
@@ -1866,6 +2204,7 @@ elif selected_menu == "Prediksi TWP90":
                     line=dict(width=3, color="#1e3a8a"),
                     marker=dict(size=7, color="#1e3a8a"),
                 ))
+
             actual_input_plot = result.dropna(subset=["Aktual_TWP90_Input_%"])
             if not actual_input_plot.empty:
                 fig.add_trace(go.Scatter(
@@ -1877,6 +2216,7 @@ elif selected_menu == "Prediksi TWP90":
                     marker=dict(size=9, color="#0f766e"),
                     hovertemplate="%{x|%b %Y}<br>Aktual input: %{y:.2f}%<extra></extra>",
                 ))
+
             fig.add_trace(go.Scatter(
                 x=result["Month"],
                 y=result["Prediksi_TWP90_%"],
@@ -1902,6 +2242,7 @@ elif selected_menu == "Prediksi TWP90":
                 hovermode="x unified",
             )
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})
+
             status_order = ["AMAN", "WASPADA", "BAHAYA"]
             status_df = result.groupby("Status", as_index=False).size().rename(columns={"size": "Jumlah Bulan"})
             status_df["Status"] = pd.Categorical(status_df["Status"], categories=status_order, ordered=True)
@@ -1926,6 +2267,8 @@ elif selected_menu == "Prediksi TWP90":
                 margin=dict(l=20, r=20, t=65, b=20),
             )
             st.plotly_chart(fig_status, use_container_width=True, config={"displayModeBar": False, "responsive": True})
+
+
 elif selected_menu == "Evaluasi Model":
     st.markdown('<div class="section-title" style="margin-top: 1rem;">Evaluasi Model</div>', unsafe_allow_html=True)
     eval_view_mode = st.selectbox(
@@ -1938,10 +2281,11 @@ elif selected_menu == "Evaluasi Model":
         key="evaluation_view_mode",
         help="Feature Importance tidak langsung ditampilkan. Pilih opsi Feature Importance jika ingin melihat grafik kontribusi fitur XGBoost residual.",
     )
+
     active_eval_summary, active_eval_detail, active_eval_scale, active_eval_source = get_active_evaluation_dataset(eval_raw)
+
     if eval_view_mode == "Evaluasi Aktual vs Prediksi":
         show_eval_panel(active_eval_summary, active_eval_detail, active_eval_source)
     else:
         st.markdown('<div class="feature-importance-spacer"></div>', unsafe_allow_html=True)
         show_hybrid_feature_importance()
-
