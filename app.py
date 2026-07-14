@@ -43,45 +43,6 @@ def resolve_artifact_path(filename: str) -> str:
             return path
     return unique_candidates[0]
 
-import streamlit as st
-
-# ... (kode st.set_page_config dan import Anda lainnya tetap di sini) ...
-
-# Tambahkan fungsi atau blok CSS berikut
-def inject_custom_css():
-    st.markdown("""
-        <style>
-        /* 1. Mengubah background Dropdown (Selectbox) menjadi putih bersih */
-        div[data-baseweb="select"] > div {
-            background-color: #FFFFFF !important;
-            border: 1px solid #E2E8F0 !important;
-            border-radius: 8px !important;
-            box-shadow: none !important;
-        }
-        
-        /* Mengubah background daftar menu dropdown yang terbuka menjadi putih */
-        ul[data-baseweb="menu"] {
-            background-color: #FFFFFF !important;
-        }
-
-        /* 2. Membuat wadah/container grafik menjadi bulat */
-        /* Jika Anda menggunakan st.container(border=True) bawaan Streamlit */
-        div[data-testid="stVerticalBlockBorderWrapper"] {
-            border-radius: 16px !important;
-            overflow: hidden !important;
-            border: 1px solid #E2E8F0 !important;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05) !important;
-        }
-        
-        /* Memastikan background elemen di dalam grafik plotly sesuai (opsional) */
-        .js-plotly-plot .plotly .bg {
-            border-radius: 16px !important;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
-# Panggil fungsi CSS-nya
-inject_custom_css()
 
 MODEL_PATH = resolve_artifact_path("hybrid_twp90_model.joblib")
 CONFIG_PATH = resolve_artifact_path("preprocessing_config.json")
@@ -1319,8 +1280,7 @@ def show_hybrid_feature_importance():
         margin=dict(l=20, r=70, t=28, b=30),
     )
     fig_importance.update_xaxes(range=[0, max(importance_df["Importance_%"].max() * 1.18, 1)])
-    with st.container(border=True):
-        st.plotly_chart(fig_status, use_container_width=True, config={"displayModeBar": False, "responsive": True})
+    st.plotly_chart(fig_importance, use_container_width=True, config={"displayModeBar": False, "responsive": True})
 
     # Tabel feature importance dihapus sesuai permintaan; evaluasi hanya menampilkan grafik dan caption.
 
