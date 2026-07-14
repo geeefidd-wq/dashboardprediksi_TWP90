@@ -1318,8 +1318,8 @@ def show_hybrid_feature_importance():
         yaxis_title="Fitur",
         margin=dict(l=20, r=70, t=28, b=30),
     )
-    with st.container(border=True):
     fig_importance.update_xaxes(range=[0, max(importance_df["Importance_%"].max() * 1.18, 1)])
+    with st.container(border=True):
     st.plotly_chart(fig_importance, use_container_width=True, config={"displayModeBar": False, "responsive": True})
 
     # Tabel feature importance dihapus sesuai permintaan; evaluasi hanya menampilkan grafik dan caption.
