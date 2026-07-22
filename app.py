@@ -73,13 +73,61 @@ FRIENDLY_LABELS = {
 }
 
 COLUMN_HELP = {
-    "Outstanding Pinjaman (miliar RP)": "Isi sesuai satuan historis model, yaitu miliar rupiah.",
-    "BI-7Day-RR": "Isi angka persen asli. Contoh: 5,75% ditulis 5.75.",
-    "Inflasi": "Isi angka persen asli. Contoh: 2,92% ditulis 2.92.",
-    "PDB (miliar Rp)": "Isi sesuai satuan historis model, yaitu miliar rupiah.",
-    "Pertumbuhan Outstanding (YoY% atau MoM%)": "Isi angka persen asli. Contoh: 18,03% ditulis 18.03.",
-    "Indeks Keyakinan Konsumen (IKK)": "Isi angka indeks IKK sesuai data/estimasi bulan tersebut.",
-    "Nilai Tukar Rupiah terhadap USD": "Isi kurs rupiah terhadap USD sesuai skala historis model.",
+    "Outstanding Pinjaman (miliar RP)": (
+        "Masukkan angka penuh sesuai data model. Contoh: 98.540.000.000.000 ditulis "
+        "98540000000000.00."
+    ),
+    "BI-7Day-RR": "Isi angka persen asli. Contoh: 4,75% ditulis 4.75.",
+    "Inflasi": "Isi angka persen asli. Contoh: 3,55% ditulis 3.55.",
+    "PDB (miliar Rp)": "Masukkan angka penuh sesuai data model. Contoh: 583968533.00.",
+    "Pertumbuhan Outstanding (YoY% atau MoM%)": "Isi angka persen asli. Contoh: 25,52% ditulis 25.52.",
+    "Indeks Keyakinan Konsumen (IKK)": "Isi angka indeks IKK. Contoh: 125,2 ditulis 125.20.",
+    "Nilai Tukar Rupiah terhadap USD": "Isi kurs rupiah terhadap USD. Contoh: 16786 ditulis 16786.00.",
+}
+
+# Batas dan increment number_input disesuaikan dengan skala data yang digunakan.
+# Semua field tetap ditampilkan dengan tepat dua angka di belakang koma.
+INPUT_NUMBER_RULES = {
+    TWP90_INPUT_COL: {
+        "min_value": 0.01,
+        "max_value": 99.99,
+        "step": 0.01,
+    },
+    "Outstanding Pinjaman (miliar RP)": {
+        "min_value": 0.01,
+        "max_value": 999_999_999_999_999.99,
+        "step": 1.00,
+    },
+    "Pertumbuhan Outstanding (YoY% atau MoM%)": {
+        "min_value": -999.99,
+        "max_value": 999.99,
+        "step": 0.01,
+    },
+    "BI-7Day-RR": {
+        "min_value": 0.00,
+        "max_value": 99.99,
+        "step": 0.01,
+    },
+    "Inflasi": {
+        "min_value": -99.99,
+        "max_value": 99.99,
+        "step": 0.01,
+    },
+    "PDB (miliar Rp)": {
+        "min_value": 0.01,
+        "max_value": 999_999_999_999.99,
+        "step": 1.00,
+    },
+    "Indeks Keyakinan Konsumen (IKK)": {
+        "min_value": 0.01,
+        "max_value": 999.99,
+        "step": 0.01,
+    },
+    "Nilai Tukar Rupiah terhadap USD": {
+        "min_value": 0.01,
+        "max_value": 999_999.99,
+        "step": 1.00,
+    },
 }
 
 
@@ -1165,17 +1213,30 @@ def rerun_dashboard():
         st.experimental_rerun()
 
 
+def input_number_config(col, percent_cols):
+    """Konfigurasi st.number_input per variabel dengan tampilan dua desimal."""
+    if col in INPUT_NUMBER_RULES:
+        rule = INPUT_NUMBER_RULES[col].copy()
+    elif col in percent_cols:
+        rule = {
+            "min_value": -999.99,
+            "max_value": 999.99,
+            "step": 0.01,
+        }
+    else:
+        rule = {
+            "min_value": -999_999_999_999_999.99,
+            "max_value": 999_999_999_999_999.99,
+            "step": 1.00,
+        }
+
+    rule["format"] = "%.2f"
+    return rule
+
+
 def input_step_for_column(col, percent_cols):
-    if col in percent_cols:
-        return 0.01
-    label = FRIENDLY_LABELS.get(col, col).lower()
-    if "nilai tukar" in label or "usd" in label:
-        return 100.0
-    if "ikk" in label or "indeks" in label:
-        return 1.0
-    if "pdb" in label or "outstanding" in label:
-        return 1000.0
-    return 1.0
+    """Dipertahankan untuk kompatibilitas dengan pemanggilan lama."""
+    return input_number_config(col, percent_cols)["step"]
 
 
 def validate_required_prediction_inputs(input_df, exog_cols, percent_cols, target_input_col=None):
@@ -1620,8 +1681,65 @@ div.stButton > button:hover, div.stDownloadButton > button:hover, div.stFormSubm
     fill:#0f2a5f !important;
 }
 
+/* Panel pilihan Evaluasi/Feature Importance mengikuti tampilan referensi. */
+div[data-testid="stVerticalBlockBorderWrapper"]:has(.evaluation-selector-marker) {
+    background:linear-gradient(180deg,#f3f8ff 0%,#edf5ff 100%) !important;
+    border:1px solid #adc8ee !important;
+    border-radius:7px !important;
+    box-shadow:0 1px 4px rgba(15,42,95,.10) !important;
+    padding:7px 9px 9px 9px !important;
+    margin-top:8px !important;
+    margin-bottom:16px !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"]:has(.evaluation-selector-marker)
+[data-testid="stVerticalBlock"] {
+    gap:2px !important;
+}
+.evaluation-selector-marker {
+    height:0;
+    overflow:hidden;
+}
+.evaluation-selector-title {
+    color:#0f2a5f;
+    font-size:15px;
+    line-height:1.15;
+    font-weight:950;
+    margin:0 0 4px 0;
+}
+.evaluation-selector-caption {
+    color:#64748b;
+    font-size:10.5px;
+    line-height:1.2;
+    margin:0 0 5px 0;
+}
+div[data-testid="stVerticalBlockBorderWrapper"]:has(.evaluation-selector-marker)
+[data-testid="stSelectbox"] {
+    margin-top:0 !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"]:has(.evaluation-selector-marker)
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+div[data-testid="stVerticalBlockBorderWrapper"]:has(.evaluation-selector-marker)
+[data-testid="stSelectbox"] div[role="button"] {
+    min-height:34px !important;
+    height:34px !important;
+    border:1px solid #93b9eb !important;
+    border-radius:5px !important;
+    background:#ffffff !important;
+    box-shadow:none !important;
+    padding-top:0 !important;
+    padding-bottom:0 !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"]:has(.evaluation-selector-marker)
+[data-testid="stSelectbox"] span,
+div[data-testid="stVerticalBlockBorderWrapper"]:has(.evaluation-selector-marker)
+[data-testid="stSelectbox"] input {
+    color:#0f2a5f !important;
+    font-size:11px !important;
+    font-weight:800 !important;
+}
+
 /* Dropdown Evaluasi/Feature: putih, termasuk daftar opsi saat dibuka */
-div[data-baseweb="select"] ul,
+div[data-baseweb="popover"] ul,
 div[data-baseweb="menu"],
 div[role="listbox"] {
     background:#ffffff !important;
@@ -2103,13 +2221,13 @@ elif selected_menu == "Prediksi TWP90":
                     unsafe_allow_html=True,
                 )
                 row = {"Month": month.strftime("%Y-%m")}
+                twp90_number_rule = input_number_config(TWP90_INPUT_COL, percent_cols)
                 row[TWP90_INPUT_COL] = st.number_input(
                     "TWP90 aktual bulan ini (%) *",
                     value=cached_input_value(month, TWP90_INPUT_COL, None),
-                    step=0.01,
-                    format="%.2f",
-                    help="Isi nilai TWP90 aktual periode input dalam angka persen asli. Contoh: 4,32% ditulis 4.32.",
+                    help="Isi nilai TWP90 aktual periode input dalam angka persen asli. Contoh: 4,38% ditulis 4.38.",
                     key=f"num_{current_signature}_{month_key}_{TWP90_INPUT_COL}",
+                    **twp90_number_rule,
                 )
 
                 input_columns = st.columns(2)
@@ -2118,13 +2236,13 @@ elif selected_menu == "Prediksi TWP90":
                     # Default input dibuat kosong, bukan 0.
                     default_value = cached_input_value(month, col, None)
                     with input_columns[j % 2]:
+                        number_rule = input_number_config(col, percent_cols)
                         row[col] = st.number_input(
                             f"{make_display_name(col, percent_cols)} *",
                             value=default_value,
-                            step=input_step_for_column(col, percent_cols),
-                            format="%.2f",
                             help=COLUMN_HELP.get(col, "Isi sesuai skala historis model."),
                             key=f"num_{current_signature}_{month_key}_{col}",
+                            **number_rule,
                         )
                 input_rows.append(row)
 
@@ -2403,17 +2521,21 @@ elif selected_menu == "Prediksi TWP90":
 
 
 elif selected_menu == "Evaluasi Model":
-    st.markdown('<div class="section-title" style="margin-top: 1rem;">Evaluasi Model</div>', unsafe_allow_html=True)
-    eval_view_mode = st.selectbox(
-        "Pilih tampilan evaluasi",
-        [
-            "Evaluasi Aktual vs Prediksi",
-            "Feature Importance Model Hybrid",
-        ],
-        index=0,
-        key="evaluation_view_mode",
-        help="Feature Importance tidak langsung ditampilkan. Pilih opsi Feature Importance jika ingin melihat grafik kontribusi fitur XGBoost residual.",
-    )
+    with st.container(border=True):
+        st.markdown('<div class="evaluation-selector-marker"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="evaluation-selector-title">Evaluasi Model</div>', unsafe_allow_html=True)
+        st.markdown('<div class="evaluation-selector-caption">Pilih tampilan evaluasi</div>', unsafe_allow_html=True)
+        eval_view_mode = st.selectbox(
+            "Pilih tampilan evaluasi",
+            [
+                "Evaluasi Aktual vs Prediksi",
+                "Feature Importance Model Hybrid",
+            ],
+            index=0,
+            key="evaluation_view_mode",
+            label_visibility="collapsed",
+            help="Pilih evaluasi aktual-prediksi atau grafik kontribusi fitur XGBoost residual.",
+        )
 
     active_eval_summary, active_eval_detail, active_eval_scale, active_eval_source = get_active_evaluation_dataset(eval_raw)
 
