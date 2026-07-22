@@ -6,6 +6,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import plotly.graph_objects as go
 
 st.set_page_config(
@@ -1105,6 +1106,58 @@ def render_modern_history_table(table):
     )
 
 
+def enable_strict_numeric_input_filter():
+    """Mencegah karakter huruf dan paste nonangka pada seluruh st.number_input."""
+    components.html(
+        r"""
+        <script>
+        (() => {
+            try {
+                const doc = window.parent.document;
+
+                const bindNumericOnly = () => {
+                    doc.querySelectorAll('input[type="number"]').forEach((input) => {
+                        if (input.dataset.numericOnlyBound === '1') return;
+                        input.dataset.numericOnlyBound = '1';
+                        input.setAttribute('inputmode', 'decimal');
+                        input.setAttribute('autocomplete', 'off');
+
+                        input.addEventListener('keydown', (event) => {
+                            const isShortcut = event.ctrlKey || event.metaKey || event.altKey;
+                            if (!isShortcut && /^[a-zA-Z]$/.test(event.key)) {
+                                event.preventDefault();
+                            }
+                        });
+
+                        input.addEventListener('beforeinput', (event) => {
+                            if (event.data && /[a-zA-Z]/.test(event.data)) {
+                                event.preventDefault();
+                            }
+                        });
+
+                        input.addEventListener('paste', (event) => {
+                            const clipboard = event.clipboardData || window.clipboardData;
+                            const rawText = clipboard ? clipboard.getData('text') : '';
+                            const normalized = rawText.trim().replace(',', '.');
+                            const isNumeric = /^-?(?:\d+|\d*\.\d+)$/.test(normalized);
+                            if (!isNumeric) event.preventDefault();
+                        });
+                    });
+                };
+
+                bindNumericOnly();
+                const observer = new MutationObserver(bindNumericOnly);
+                observer.observe(doc.body, {childList: true, subtree: true});
+            } catch (error) {
+                // st.number_input tetap melakukan validasi numerik bawaan jika akses parent dibatasi.
+            }
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+
 def rerun_dashboard():
     if hasattr(st, "rerun"):
         st.rerun()
@@ -1540,6 +1593,7 @@ div.stButton > button:hover, div.stDownloadButton > button:hover, div.stFormSubm
 [data-testid="stDateInput"] div[data-baseweb="input"],
 [data-testid="stSelectbox"] div[data-baseweb="select"],
 [data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div > div,
 [data-testid="stSelectbox"] div[role="button"] {
     background:#ffffff !important;
     background-color:#ffffff !important;
@@ -1547,8 +1601,14 @@ div.stButton > button:hover, div.stDownloadButton > button:hover, div.stFormSubm
 }
 [data-testid="stSelectbox"] div[data-baseweb="select"] > div,
 [data-testid="stSelectbox"] div[role="button"] {
-    border:1px solid #bfdbfe !important;
-    box-shadow:none !important;
+    min-height:48px !important;
+    border:1px solid #ffffff !important;
+    box-shadow:0 1px 3px rgba(15,42,95,.04) !important;
+}
+/* Menutup warna abu-abu bawaan BaseWeb pada control selectbox. */
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div:first-child,
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div:first-child > div {
+    background-color:#ffffff !important;
 }
 [data-testid="stSelectbox"] span,
 [data-testid="stSelectbox"] input {
@@ -1577,41 +1637,53 @@ div[role="option"][aria-selected="true"] {
     color:#0f2a5f !important;
 }
 
-/* Tab Hasil Prediksi dan Grafik Tren dibuat oval/pill */
+/* Tab Hasil Prediksi dan Grafik Tren sesuai referensi */
 .stTabs [data-baseweb="tab-list"] {
-    gap:10px !important;
+    position:relative !important;
+    gap:12px !important;
     align-items:center !important;
-    padding:4px 0 10px 0 !important;
+    padding:0 0 9px 0 !important;
     background:transparent !important;
-    border-bottom:0 !important;
+    border-bottom:3px solid #d8e2ee !important;
+    overflow:visible !important;
 }
 .stTabs button[data-baseweb="tab"],
 .stTabs [role="tab"] {
-    min-height:42px !important;
-    padding:9px 18px !important;
+    min-height:52px !important;
+    padding:10px 22px !important;
     margin:0 !important;
     border:1px solid transparent !important;
     border-radius:999px !important;
-    background:#e0ecff !important;
+    background:#dceaff !important;
     color:#1e3a8a !important;
+    font-size:14px !important;
     font-weight:900 !important;
     box-shadow:none !important;
-    overflow:hidden !important;
+    overflow:visible !important;
 }
 .stTabs button[data-baseweb="tab"] p,
 .stTabs [role="tab"] p {
     color:inherit !important;
+    font-size:14px !important;
     font-weight:900 !important;
 }
 .stTabs button[data-baseweb="tab"][aria-selected="true"],
 .stTabs [role="tab"][aria-selected="true"] {
-    background:linear-gradient(135deg,#1d4ed8,#38bdf8) !important;
+    background:linear-gradient(135deg,#1d4ed8 0%,#38bdf8 100%) !important;
     color:#ffffff !important;
     border-color:transparent !important;
     border-radius:999px !important;
-    box-shadow:0 8px 18px rgba(29,78,216,.20) !important;
+    box-shadow:0 7px 16px rgba(29,78,216,.20) !important;
 }
-.stTabs [data-baseweb="tab-highlight"],
+/* Indikator tab aktif dibuat merah seperti contoh. */
+.stTabs [data-baseweb="tab-highlight"] {
+    display:block !important;
+    height:4px !important;
+    bottom:-3px !important;
+    background:#ff3b3b !important;
+    border-radius:999px !important;
+    z-index:5 !important;
+}
 .stTabs [data-baseweb="tab-border"] {
     display:none !important;
 }
@@ -1663,6 +1735,8 @@ hr {border-color:#cce0ff;}
 """,
     unsafe_allow_html=True,
 )
+
+enable_strict_numeric_input_filter()
 
 st.markdown(
     f"""
@@ -2174,7 +2248,6 @@ elif selected_menu == "Prediksi TWP90":
             display_result = result[[
                 "Month",
                 "Input_Month",
-                "Sumber_TWP90",
                 "Aktual_TWP90_Input_%",
                 "Prediksi_SARIMAX_Original",
                 "Prediksi_Residual_XGB_Log",
@@ -2190,7 +2263,6 @@ elif selected_menu == "Prediksi TWP90":
             display_result = display_result[[
                 "Input_Month",
                 "Month",
-                "Sumber_TWP90",
                 "Aktual_TWP90_Input_%",
                 "Prediksi_SARIMAX_%",
                 "Prediksi_Residual_XGB_Log",
@@ -2201,7 +2273,6 @@ elif selected_menu == "Prediksi TWP90":
             ]].rename(columns={
                 "Input_Month": "Input Aktual Sampai",
                 "Month": "Periode Prediksi",
-                "Sumber_TWP90": "Jenis Periode",
                 "Aktual_TWP90_Input_%": "TWP90 Aktual Input (%)",
                 "Prediksi_SARIMAX_%": "SARIMAX (%)",
                 "Prediksi_Residual_XGB_Log": "Residual XGB (log)",
