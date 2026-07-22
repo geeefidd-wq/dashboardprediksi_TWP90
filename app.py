@@ -1629,7 +1629,7 @@ div[role="listbox"] {
 }
 div[role="option"] {
     background:#ffffff !important;
-    color:#0f2a5f !important;
+    color:#ffffff !important;
 }
 div[role="option"]:hover,
 div[role="option"][aria-selected="true"] {
