@@ -1577,40 +1577,6 @@ div[role="option"][aria-selected="true"] {
     color:#0f2a5f !important;
 }
 
-/* Paksa kotak selectbox Evaluasi Model putih seperti kotak date input Prediksi */
-div[data-testid="stSelectbox"] div[data-baseweb="select"],
-div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
-div[data-testid="stSelectbox"] div[data-baseweb="select"] > div > div {
-    background:#ffffff !important;
-    background-color:#ffffff !important;
-}
-
-div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
-    border:1px solid #e2e8f0 !important;
-    border-radius:16px !important;
-    box-shadow:none !important;
-    min-height:48px !important;
-}
-
-div[data-testid="stSelectbox"] div[data-baseweb="select"] > div:hover,
-div[data-testid="stSelectbox"] div[data-baseweb="select"] > div:focus-within {
-    background:#ffffff !important;
-    background-color:#ffffff !important;
-    border-color:#bfdbfe !important;
-}
-
-div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
-div[data-testid="stSelectbox"] div[data-baseweb="select"] input {
-    background:transparent !important;
-    color:#0f2a5f !important;
-    -webkit-text-fill-color:#0f2a5f !important;
-}
-
-div[data-testid="stSelectbox"] div[data-baseweb="select"] svg {
-    color:#0f2a5f !important;
-    fill:#0f2a5f !important;
-}
-
 /* Tab Hasil Prediksi dan Grafik Tren dibuat oval/pill */
 .stTabs [data-baseweb="tab-list"] {
     gap:10px !important;
