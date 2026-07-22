@@ -1622,14 +1622,14 @@ div.stButton > button:hover, div.stDownloadButton > button:hover, div.stFormSubm
 
 /* Dropdown Evaluasi/Feature: putih, termasuk daftar opsi saat dibuka */
 div[data-baseweb="select"] ul,
-div[data-baseweb="select"],
+div[data-baseweb="menu"],
 div[role="listbox"] {
     background:#ffffff !important;
     background-color:#ffffff !important;
 }
 div[role="option"] {
     background:#ffffff !important;
-    color:#ffffff !important;
+    color:#0f2a5f !important;
 }
 div[role="option"]:hover,
 div[role="option"][aria-selected="true"] {
