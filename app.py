@@ -81,6 +81,68 @@ COLUMN_HELP = {
     "Nilai Tukar Rupiah terhadap USD": "Isi kurs rupiah terhadap USD sesuai skala historis model.",
 }
 
+# Format input disesuaikan dengan pola digit pada file Excel "Latihan Data Dashboard.xlsx".
+# Streamlit number_input tidak menyediakan max_chars, sehingga panjang karakter dikendalikan
+# melalui format desimal, step, serta batas angka yang sesuai dengan jumlah digit setiap variabel.
+INPUT_FIELD_SPECS = {
+    TWP90_INPUT_COL: {
+        "format": "%.2f",
+        "step": 0.01,
+        "min_value": 0.01,
+        "max_value": 99.99,
+        "character_hint": "maksimal 5 karakter angka (2 digit dan 2 desimal)",
+    },
+    "Outstanding Pinjaman (miliar RP)": {
+        "format": "%.0f",
+        "step": 1_000_000_000.0,
+        "min_value": 1.0,
+        "max_value": 999_999_999_999_999.0,
+        "character_hint": "maksimal 15 digit tanpa desimal",
+    },
+    "Pertumbuhan Outstanding (YoY% atau MoM%)": {
+        "format": "%.2f",
+        "step": 0.01,
+        "min_value": -999.99,
+        "max_value": 999.99,
+        "character_hint": "maksimal 3 digit dan 2 desimal",
+    },
+    "BI-7Day-RR": {
+        "format": "%.2f",
+        "step": 0.01,
+        "min_value": -99.99,
+        "max_value": 99.99,
+        "character_hint": "maksimal 2 digit dan 2 desimal",
+    },
+    "Inflasi": {
+        "format": "%.2f",
+        "step": 0.01,
+        "min_value": -99.99,
+        "max_value": 99.99,
+        "character_hint": "maksimal 2 digit dan 2 desimal",
+    },
+    "PDB (miliar Rp)": {
+        "format": "%.0f",
+        "step": 1_000_000.0,
+        "min_value": 1.0,
+        "max_value": 9_999_999_999.0,
+        "character_hint": "maksimal 10 digit tanpa desimal",
+    },
+    "Indeks Keyakinan Konsumen (IKK)": {
+        "format": "%.1f",
+        "step": 0.1,
+        "min_value": 0.1,
+        "max_value": 999.9,
+        "character_hint": "maksimal 3 digit dan 1 desimal",
+    },
+    "Nilai Tukar Rupiah terhadap USD": {
+        "format": "%.0f",
+        "step": 1.0,
+        "min_value": 1.0,
+        "max_value": 999_999.0,
+        "character_hint": "maksimal 6 digit tanpa desimal",
+    },
+}
+
 
 def _missing_file_message(path: str) -> str:
     return (
@@ -994,16 +1056,16 @@ def _html_text(value):
     return escape(str(value))
 
 
-def _progress_html(value, max_value, suffix="%"):
+def _progress_html(value, max_value, suffix="%", digits=2):
     value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.isna(value):
         value = 0.0
-    max_value = max(float(max_value), 1.0)
+    max_value = max(float(max_value), 1e-12)
     width = max(0.0, min(100.0, (float(value) / max_value) * 100.0))
     suffix = escape(str(suffix))
     return f"""
     <div class="progress-cell">
-        <div class="progress-meta"><span>{float(value):.2f}</span><span>{suffix}</span></div>
+        <div class="progress-meta"><span>{float(value):.{int(digits)}f}</span><span>{suffix}</span></div>
         <div class="progress-track"><div class="progress-fill" style="width:{width:.2f}%;"></div></div>
     </div>
     """
@@ -1033,14 +1095,18 @@ def render_modern_blue_table(
     status_cols=None,
     numeric_cols=None,
     suffix_map=None,
+    digits_map=None,
+    progress_max_map=None,
     height=460,
 ):
-    """Render tabel custom bertema biru agar semua menu konsisten dengan tabel dashboard."""
+    """Render tabel biru dengan progress bar konsisten seperti referensi dashboard."""
     table = clean_undefined_strings(table.copy())
     progress_cols = list(progress_cols or [])
     delta_cols = list(delta_cols or [])
     status_cols = list(status_cols or ["Status Risiko", "Status"])
     suffix_map = suffix_map or {}
+    digits_map = digits_map or {}
+    progress_max_map = progress_max_map or {}
 
     if numeric_cols is None:
         numeric_cols = []
@@ -1053,8 +1119,13 @@ def render_modern_blue_table(
     for col in progress_cols:
         if col in table.columns:
             numeric_values = pd.to_numeric(table[col], errors="coerce")
-            if numeric_values.notna().any():
-                max_values[col] = max(1.0, float(numeric_values.max()) + 1)
+            configured_max = pd.to_numeric(
+                pd.Series([progress_max_map.get(col)]), errors="coerce"
+            ).iloc[0]
+            if pd.notna(configured_max) and float(configured_max) > 0:
+                max_values[col] = float(configured_max)
+            elif numeric_values.notna().any():
+                max_values[col] = max(1.0, float(numeric_values.max()) + 0.50)
             else:
                 max_values[col] = 1.0
 
@@ -1064,17 +1135,22 @@ def render_modern_blue_table(
         cells = []
         for col in table.columns:
             value = row[col]
+            digits = int(digits_map.get(col, 2))
             if col in progress_cols:
-                cells.append(f"<td>{_progress_html(value, max_values[col], suffix_map.get(col, '%'))}</td>")
+                cells.append(
+                    f"<td>{_progress_html(value, max_values[col], suffix_map.get(col, '%'), digits=digits)}</td>"
+                )
             elif col in delta_cols:
                 delta = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
                 cls = "delta-pos" if pd.notna(delta) and float(delta) >= 0 else "delta-neg"
-                display = "" if pd.isna(delta) else f"{float(delta):.2f}"
+                display = "" if pd.isna(delta) else f"{float(delta):.{digits}f}"
                 cells.append(f'<td><span class="{cls}">{display}</span></td>')
             elif col in status_cols:
                 cells.append(f"<td>{_status_badge_html(value)}</td>")
             elif col in numeric_cols:
-                cells.append(f"<td>{_number_html(value, suffix=suffix_map.get(col, ''))}</td>")
+                cells.append(
+                    f"<td>{_number_html(value, digits=digits, suffix=suffix_map.get(col, ''))}</td>"
+                )
             else:
                 cells.append(f"<td>{_html_text(value)}</td>")
         body_rows.append("<tr>" + "".join(cells) + "</tr>")
@@ -1113,16 +1189,63 @@ def rerun_dashboard():
 
 
 def input_step_for_column(col, percent_cols):
+    spec = INPUT_FIELD_SPECS.get(col)
+    if spec:
+        return float(spec["step"])
     if col in percent_cols:
         return 0.01
     label = FRIENDLY_LABELS.get(col, col).lower()
     if "nilai tukar" in label or "usd" in label:
-        return 100.0
-    if "ikk" in label or "indeks" in label:
         return 1.0
-    if "pdb" in label or "outstanding" in label:
-        return 1000.0
+    if "ikk" in label or "indeks" in label:
+        return 0.1
+    if "pdb" in label:
+        return 1_000_000.0
+    if "outstanding" in label:
+        return 1_000_000_000.0
     return 1.0
+
+
+def input_widget_spec(col, percent_cols):
+    """Ambil format, step, dan batas digit input berdasarkan struktur file Excel."""
+    if col in INPUT_FIELD_SPECS:
+        return dict(INPUT_FIELD_SPECS[col])
+
+    if col in percent_cols:
+        return {
+            "format": "%.2f",
+            "step": 0.01,
+            "min_value": -999.99,
+            "max_value": 999.99,
+            "character_hint": "maksimal 3 digit dan 2 desimal",
+        }
+
+    return {
+        "format": "%.2f",
+        "step": input_step_for_column(col, percent_cols),
+        "min_value": None,
+        "max_value": None,
+        "character_hint": "mengikuti skala historis model",
+    }
+
+
+def number_input_spec_kwargs(col, percent_cols):
+    """Susun keyword number_input tanpa mengirim batas yang bernilai None."""
+    spec = input_widget_spec(col, percent_cols)
+    kwargs = {
+        "step": float(spec["step"]),
+        "format": str(spec["format"]),
+    }
+    if spec.get("min_value") is not None:
+        kwargs["min_value"] = float(spec["min_value"])
+    if spec.get("max_value") is not None:
+        kwargs["max_value"] = float(spec["max_value"])
+    return kwargs
+
+
+def input_help_text(col, percent_cols, base_help):
+    spec = input_widget_spec(col, percent_cols)
+    return f"{base_help} Format input: {spec['character_hint']}."
 
 
 def validate_required_prediction_inputs(input_df, exog_cols, percent_cols, target_input_col=None):
@@ -1524,7 +1647,11 @@ div.stButton > button:hover, div.stDownloadButton > button:hover, div.stFormSubm
 /* Form Input & Element Interaktif */
 [data-testid="stNumberInput"] input {
     border-radius:14px !important; border:1px solid #bfdbfe !important; background:#ffffff !important;
-    color:#0f2a5f !important; font-weight:800 !important;
+    color:#0f2a5f !important; font-weight:850 !important; font-size:14px !important;
+    font-variant-numeric:tabular-nums !important; letter-spacing:.01em !important;
+}
+[data-testid="stNumberInput"] button {
+    background:#f4f9ff !important; color:#0f2a5f !important; border-color:#bfdbfe !important;
 }
 [data-testid="stDateInput"] div[data-baseweb="input"] > div,
 [data-testid="stDateInput"] input,
@@ -1543,10 +1670,45 @@ div.stButton > button:hover, div.stDownloadButton > button:hover, div.stFormSubm
     background-color:#ffffff !important;
     border-radius:14px !important;
 }
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+[data-testid="stSelectbox"] [data-baseweb="value-container"],
+[data-testid="stSelectbox"] span {
+    background-color:#ffffff !important;
+    color:#0f2a5f !important;
+}
 [data-testid="stDateInput"] svg,
 [data-testid="stSelectbox"] svg {
     color:#0f2a5f !important;
     fill:#0f2a5f !important;
+}
+/* Popover pilihan evaluasi juga dipaksa putih, termasuk saat tema browser gelap. */
+div[data-baseweb="popover"] {
+    background:transparent !important;
+}
+div[data-baseweb="popover"] ul[role="listbox"],
+ul[role="listbox"] {
+    background:#ffffff !important;
+    border:1px solid #c7ddff !important;
+    border-radius:12px !important;
+    box-shadow:0 16px 36px rgba(15,42,95,.16) !important;
+    padding:6px !important;
+}
+div[data-baseweb="popover"] li[role="option"],
+li[role="option"] {
+    background:#ffffff !important;
+    color:#0f2a5f !important;
+    border-radius:9px !important;
+    font-weight:750 !important;
+}
+div[data-baseweb="popover"] li[role="option"]:hover,
+li[role="option"]:hover {
+    background:#eff6ff !important;
+    color:#0f2a5f !important;
+}
+div[data-baseweb="popover"] li[role="option"][aria-selected="true"],
+li[role="option"][aria-selected="true"] {
+    background:#dbeafe !important;
+    color:#0f2a5f !important;
 }
 .stTabs [data-baseweb="tab-list"] {gap:8px;}
 .stTabs [data-baseweb="tab"] {
@@ -1586,10 +1748,11 @@ div.stButton > button:hover, div.stDownloadButton > button:hover, div.stFormSubm
 .blue-modern-table tbody tr:nth-child(even){background:#f6faff;}
 .blue-modern-table tbody tr:hover{background:#eaf4ff;}
 .blue-modern-table td{padding:12px 16px; border-bottom:1px solid #e2efff; vertical-align:middle; font-weight:700;}
-.progress-cell{min-width:180px;}
-.progress-meta{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:7px; font-weight:900; color:#0f2a5f;}
-.progress-track{height:9px; border-radius:999px; background:#eaf1fb; overflow:hidden; box-shadow:inset 0 1px 2px rgba(15,42,95,.07);}
-.progress-fill{height:100%; border-radius:999px; background:linear-gradient(90deg,#1d4ed8,#38bdf8);}
+.progress-cell{min-width:168px; max-width:220px;}
+.progress-meta{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; font-weight:950; color:#0f2a5f; font-variant-numeric:tabular-nums;}
+.progress-meta span:last-child{font-size:11px; color:#0f2a5f; opacity:.86;}
+.progress-track{height:8px; border-radius:999px; background:#e7eef8; overflow:hidden; box-shadow:inset 0 1px 2px rgba(15,42,95,.08);}
+.progress-fill{height:100%; border-radius:999px; background:linear-gradient(90deg,#1746c8 0%,#1d79e8 56%,#27b8ed 100%); box-shadow:0 2px 6px rgba(37,99,235,.22);}
 .status-badge{display:inline-flex; align-items:center; justify-content:center; min-width:86px; border-radius:999px; padding:7px 11px; font-size:12px; font-weight:950; letter-spacing:.04em;}
 .status-aman{background:#dcfce7; color:#166534; border:1px solid #86efac;}
 .status-waspada{background:#ffedd5; color:#9a3412; border:1px solid #fdba74;}
@@ -1659,6 +1822,28 @@ if selected_menu != "Evaluasi Model":
         st.markdown(value_card("Data historis", f"{len(raw_history):,} bulan", f"Sampai {last_observed.strftime('%B %Y')}", "#1e3a8a"), unsafe_allow_html=True)
 
 
+def apply_reference_line_chart_theme(fig):
+    """Tema grafik garis mengikuti referensi: latar biru muda, grid tipis, dan teks navy."""
+    fig.update_xaxes(
+        showgrid=False,
+        zeroline=False,
+        showline=True,
+        linecolor="#c8dcf6",
+        tickfont=dict(color="#5d7393", size=11),
+        title_font=dict(color="#5d7393", size=12),
+    )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor="#d9e8f8",
+        gridwidth=1,
+        zeroline=False,
+        showline=False,
+        tickfont=dict(color="#5d7393", size=11),
+        title_font=dict(color="#5d7393", size=12),
+    )
+    return fig
+
+
 def show_historical_chart():
     fig = go.Figure()
     if not history.empty and "Actual_Original" in history.columns:
@@ -1696,15 +1881,16 @@ def show_historical_chart():
     fig.update_layout(
         height=520,
         title=dict(text=""),
-        plot_bgcolor="rgba(240,247,255,1)",
+        plot_bgcolor="#eef6ff",
         paper_bgcolor="rgba(255,255,255,0)",
         font=dict(color="#0f2a5f"),
         xaxis_title="Periode",
         yaxis_title="TWP90 (%)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=70, b=20),
+        margin=dict(l=20, r=20, t=62, b=20),
         hovermode="x unified",
     )
+    apply_reference_line_chart_theme(fig)
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})
 
 
@@ -1756,16 +1942,17 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
     ))
     fig_eval.update_layout(
         height=430,
-        title="Evaluasi Aktual vs Prediksi Hybrid",
-        plot_bgcolor="rgba(240,247,255,1)",
+        title=dict(text=""),
+        plot_bgcolor="#eef6ff",
         paper_bgcolor="rgba(255,255,255,0)",
         font=dict(color="#0f2a5f"),
         xaxis_title="Periode",
         yaxis_title="TWP90 (%)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=70, b=20),
+        margin=dict(l=20, r=20, t=56, b=20),
         hovermode="x unified",
     )
+    apply_reference_line_chart_theme(fig_eval)
     st.plotly_chart(fig_eval, use_container_width=True, config={"displayModeBar": False, "responsive": True})
 
     eval_table = eval_plot.copy()
@@ -1788,6 +1975,11 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
 
     st.markdown('<div class="eval-table-title">Tabel Detail Evaluasi Aktual vs Prediksi</div>', unsafe_allow_html=True)
     eval_table = round_numeric_display(clean_undefined_strings(eval_table), 2)
+    eval_pct_max = max(
+        RISK_RED_PCT + 0.50,
+        float(pd.to_numeric(eval_table.get("TWP90 Aktual (%)"), errors="coerce").max() or 0) + 0.25,
+        float(pd.to_numeric(eval_table.get("Prediksi Hybrid (%)"), errors="coerce").max() or 0) + 0.25,
+    )
     render_modern_blue_table(
         eval_table,
         progress_cols=[c for c in ["TWP90 Aktual (%)", "Prediksi Hybrid (%)", "Abs Error (pp)"] if c in eval_table.columns],
@@ -1795,6 +1987,17 @@ def show_eval_panel(summary=None, detail=None, source_mode="artifact_history"):
         status_cols=["Status Risiko"],
         numeric_cols=[c for c in ["Abs Error (pp)"] if c in eval_table.columns],
         suffix_map={"TWP90 Aktual (%)": "%", "Prediksi Hybrid (%)": "%", "Abs Error (pp)": "pp"},
+        digits_map={
+            "TWP90 Aktual (%)": 2,
+            "Prediksi Hybrid (%)": 2,
+            "Selisih (pp)": 2,
+            "Abs Error (pp)": 2,
+        },
+        progress_max_map={
+            "TWP90 Aktual (%)": eval_pct_max,
+            "Prediksi Hybrid (%)": eval_pct_max,
+            "Abs Error (pp)": max(2.0, float(pd.to_numeric(eval_table.get("Abs Error (pp)"), errors="coerce").max() or 0) + 0.25),
+        },
         height=420,
     )
 
@@ -1970,10 +2173,13 @@ elif selected_menu == "Prediksi TWP90":
                 row[TWP90_INPUT_COL] = st.number_input(
                     "TWP90 aktual bulan ini (%) *",
                     value=cached_input_value(month, TWP90_INPUT_COL, None),
-                    step=0.01,
-                    format="%.2f",
-                    help="Isi nilai TWP90 aktual periode input dalam angka persen asli. Contoh: 4,32% ditulis 4.32.",
+                    help=input_help_text(
+                        TWP90_INPUT_COL,
+                        percent_cols,
+                        "Isi nilai TWP90 aktual periode input dalam angka persen asli. Contoh: 4,32% ditulis 4.32.",
+                    ),
                     key=f"num_{current_signature}_{month_key}_{TWP90_INPUT_COL}",
+                    **number_input_spec_kwargs(TWP90_INPUT_COL, percent_cols),
                 )
 
                 input_columns = st.columns(2)
@@ -1985,10 +2191,13 @@ elif selected_menu == "Prediksi TWP90":
                         row[col] = st.number_input(
                             f"{make_display_name(col, percent_cols)} *",
                             value=default_value,
-                            step=input_step_for_column(col, percent_cols),
-                            format="%.2f",
-                            help=COLUMN_HELP.get(col, "Isi sesuai skala historis model."),
+                            help=input_help_text(
+                                col,
+                                percent_cols,
+                                COLUMN_HELP.get(col, "Isi sesuai skala historis model."),
+                            ),
                             key=f"num_{current_signature}_{month_key}_{col}",
+                            **number_input_spec_kwargs(col, percent_cols),
                         )
                 input_rows.append(row)
 
@@ -2089,15 +2298,15 @@ elif selected_menu == "Prediksi TWP90":
                     <div class="component-grid">
                         <div class="component-item">
                             <div class="component-label">SARIMAX</div>
-                            <div class="component-value">{selected_row['Prediksi_SARIMAX_Original'] * 100:.2f}%</div>
+                            <div class="component-value">{selected_row['Prediksi_SARIMAX_Original'] * 100:.3f}%</div>
                         </div>
                         <div class="component-item">
                             <div class="component-label">Residual XGBoost log</div>
-                            <div class="component-value">{selected_row['Prediksi_Residual_XGB_Log']:.2f}</div>
+                            <div class="component-value">{selected_row['Prediksi_Residual_XGB_Log']:.6f}</div>
                         </div>
                         <div class="component-item">
                             <div class="component-label">Hybrid original</div>
-                            <div class="component-value">{selected_row['Prediksi_Hybrid_Original']:.2f}</div>
+                            <div class="component-value">{selected_row['Prediksi_Hybrid_Original']:.6f}</div>
                         </div>
                     </div>
                 </div>
@@ -2148,7 +2357,26 @@ elif selected_menu == "Prediksi TWP90":
                 "Error_Hybrid_pp": "Selisih Prediksi-Aktual (pp)",
                 "Status": "Status Risiko",
             })
-            display_result = round_numeric_display(clean_undefined_strings(display_result), 2)
+            display_result = round_numeric_display(clean_undefined_strings(display_result), 6)
+            download_result = display_result.copy()
+            # Tampilan layar mengikuti referensi: periode sudah terlihat pada ringkasan,
+            # sehingga tabel fokus pada jenis periode dan komponen hasil model.
+            display_result = display_result[[
+                "Jenis Periode",
+                "TWP90 Aktual Input (%)",
+                "SARIMAX (%)",
+                "Residual XGB (log)",
+                "Prediksi Hybrid (%)",
+                "Prediksi TWP90 (%)",
+                "Selisih Prediksi-Aktual (pp)",
+                "Status Risiko",
+            ]]
+            prediction_bar_max = max(
+                RISK_RED_PCT + 0.50,
+                float(pd.to_numeric(display_result["SARIMAX (%)"], errors="coerce").max()) + 0.25,
+                float(pd.to_numeric(display_result["Prediksi Hybrid (%)"], errors="coerce").max()) + 0.25,
+                float(pd.to_numeric(display_result["Prediksi TWP90 (%)"], errors="coerce").max()) + 0.25,
+            )
             render_modern_blue_table(
                 display_result,
                 progress_cols=["SARIMAX (%)", "Prediksi Hybrid (%)", "Prediksi TWP90 (%)"],
@@ -2162,9 +2390,22 @@ elif selected_menu == "Prediksi TWP90":
                     "Prediksi TWP90 (%)": "%",
                     "Selisih Prediksi-Aktual (pp)": "pp",
                 },
+                digits_map={
+                    "TWP90 Aktual Input (%)": 3,
+                    "SARIMAX (%)": 3,
+                    "Residual XGB (log)": 3,
+                    "Prediksi Hybrid (%)": 3,
+                    "Prediksi TWP90 (%)": 3,
+                    "Selisih Prediksi-Aktual (pp)": 3,
+                },
+                progress_max_map={
+                    "SARIMAX (%)": prediction_bar_max,
+                    "Prediksi Hybrid (%)": prediction_bar_max,
+                    "Prediksi TWP90 (%)": prediction_bar_max,
+                },
                 height=460,
             )
-            csv_download = display_result.to_csv(index=False).encode("utf-8")
+            csv_download = download_result.to_csv(index=False).encode("utf-8")
             st.download_button(
                 "Download hasil prediksi CSV",
                 data=csv_download,
@@ -2231,16 +2472,17 @@ elif selected_menu == "Prediksi TWP90":
             fig.add_hline(y=RISK_RED_PCT, line_dash="dash", line_color="#dc2626", annotation_text=f"Bahaya {RISK_RED_PCT:.2f}%")
             fig.update_layout(
                 height=540,
-                title="Tren Historis, TWP90 Input, dan Prediksi Berantai",
-                plot_bgcolor="rgba(240,247,255,1)",
+                title=dict(text=""),
+                plot_bgcolor="#eef6ff",
                 paper_bgcolor="rgba(255,255,255,0)",
                 font=dict(color="#0f2a5f"),
                 xaxis_title="Periode",
                 yaxis_title="TWP90 (%)",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                margin=dict(l=20, r=20, t=70, b=20),
+                margin=dict(l=20, r=20, t=60, b=20),
                 hovermode="x unified",
             )
+            apply_reference_line_chart_theme(fig)
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})
 
             status_order = ["AMAN", "WASPADA", "BAHAYA"]
