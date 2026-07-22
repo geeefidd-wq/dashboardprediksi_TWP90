@@ -1611,48 +1611,177 @@ def _render_feature_importance_chart(importance_df, title, bar_color):
     )
 
 
-def show_hybrid_feature_importance():
-    importance = get_hybrid_feature_importance(artifacts, cfg, raw_history, top_n=20)
+def get_combined_hybrid_feature_importance(artifacts, cfg, raw_history, top_n=20):
+    """Gabungkan importance SARIMAX dan XGBoost ke satu tampilan model hybrid.
+
+    Masing-masing komponen lebih dahulu dinormalisasi di dalam komponennya.
+    Ketika kedua komponen tersedia, kontribusi tampilan diberi bobot seimbang
+    50:50. Jika hanya satu komponen tersedia, komponen tersebut memakai bobot 100%.
+    """
+    importance = get_hybrid_feature_importance(
+        artifacts,
+        cfg,
+        raw_history,
+        top_n=10_000,
+    )
     sarimax_df = importance.get("sarimax", pd.DataFrame())
     xgb_df = importance.get("xgboost", pd.DataFrame())
 
-    st.markdown('<div class="section-title">Feature Importance Model Hybrid</div>', unsafe_allow_html=True)
+    available_components = []
+    if sarimax_df is not None and not sarimax_df.empty:
+        available_components.append(("SARIMAX", sarimax_df))
+    if xgb_df is not None and not xgb_df.empty:
+        available_components.append(("XGBoost residual", xgb_df))
+
+    if not available_components:
+        return pd.DataFrame()
+
+    component_weight = 1.0 / len(available_components)
+    frames = []
+
+    for component_name, component_df in available_components:
+        part = component_df.copy()
+        part["Importance_%"] = pd.to_numeric(part["Importance_%"], errors="coerce")
+        part = part.dropna(subset=["Importance_%"])
+        part = part[part["Importance_%"] > 0].copy()
+        if part.empty:
+            continue
+
+        part["Hybrid_Importance_%"] = part["Importance_%"] * component_weight
+        part["Component_Source"] = component_name
+        frames.append(
+            part[[
+                "Feature",
+                "Feature_Label",
+                "Hybrid_Importance_%",
+                "Component_Source",
+            ]]
+        )
+
+    if not frames:
+        return pd.DataFrame()
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined = (
+        combined.groupby(["Feature", "Feature_Label"], as_index=False)
+        .agg({
+            "Hybrid_Importance_%": "sum",
+            "Component_Source": lambda values: " + ".join(sorted(set(map(str, values)))),
+        })
+    )
+
+    combined = (
+        combined.sort_values("Hybrid_Importance_%", ascending=False)
+        .head(int(top_n))
+        .sort_values("Hybrid_Importance_%", ascending=True)
+        .reset_index(drop=True)
+    )
+    return combined
+
+
+def _hybrid_importance_bar_colors(n_rows):
+    """Palet biru bergradasi dari fitur kecil ke fitur paling dominan."""
+    palette = [
+        "#e7f2fa", "#dceef8", "#d0e9f5", "#c3e3f1", "#b5dced",
+        "#a7d5e9", "#98cde5", "#88c4df", "#77bad9", "#66b0d3",
+        "#55a6cc", "#449bc5", "#348fbd", "#2a83b5", "#2377ac",
+        "#1d6aa2", "#185d97", "#14508b", "#10427d", "#0b326b",
+    ]
+    n_rows = max(0, int(n_rows))
+    if n_rows <= len(palette):
+        return palette[-n_rows:] if n_rows else []
+
+    # Fallback bila jumlah batang diubah menjadi lebih dari 20.
+    return [
+        palette[min(int(i * (len(palette) - 1) / max(n_rows - 1, 1)), len(palette) - 1)]
+        for i in range(n_rows)
+    ]
+
+
+def show_hybrid_feature_importance():
+    importance_df = get_combined_hybrid_feature_importance(
+        artifacts,
+        cfg,
+        raw_history,
+        top_n=20,
+    )
+
     st.markdown(
-        """
-        <div class="info-box">
-            Model hybrid terdiri dari dua komponen yang berbeda. <b>SARIMAX</b> menjelaskan target utama melalui
-            variabel eksogen dan struktur deret waktu, sedangkan <b>XGBoost</b> mempelajari residual SARIMAX.
-            Karena metodenya berbeda, importance dinormalisasi <b>secara terpisah pada masing-masing komponen</b>
-            dan tidak dijumlahkan menjadi satu skor hybrid yang arbitrer.
-        </div>
-        """,
+        '<div class="section-title">Feature Importance Model Hybrid</div>',
         unsafe_allow_html=True,
     )
 
-    if sarimax_df.empty and xgb_df.empty:
+    if importance_df is None or importance_df.empty:
         st.markdown(
             """
-            <div class="warn-box" style="margin-top:12px;">
-                Feature importance belum dapat ditampilkan. Pastikan artifact menyimpan <b>final_sarimax</b>,
-                <b>exog_cols_sarimax</b>, <b>final_xgb</b>, dan <b>final_xgb_feature_cols</b>.
+            <div class="info-box">
+                Feature importance belum dapat ditampilkan. Pastikan artifact model
+                menyimpan parameter SARIMAX dan feature importance XGBoost.
             </div>
             """,
             unsafe_allow_html=True,
         )
         return
 
-    st.markdown('<div class="feature-importance-spacer"></div>', unsafe_allow_html=True)
-    _render_feature_importance_chart(
-        sarimax_df,
-        "Feature Importance SARIMAX — Dampak Koefisien Terstandardisasi",
-        "#1d4ed8",
+    bar_colors = _hybrid_importance_bar_colors(len(importance_df))
+    max_importance = float(importance_df["Hybrid_Importance_%"].max())
+
+    fig_importance = go.Figure(go.Bar(
+        x=importance_df["Hybrid_Importance_%"],
+        y=importance_df["Feature_Label"],
+        orientation="h",
+        text=[f"{value:.2f}%" for value in importance_df["Hybrid_Importance_%"]],
+        textposition="outside",
+        cliponaxis=False,
+        marker=dict(
+            color=bar_colors,
+            line=dict(width=0),
+        ),
+        customdata=np.stack([
+            importance_df["Feature"].astype(str),
+            importance_df["Component_Source"].astype(str),
+        ], axis=-1),
+        hovertemplate=(
+            "<b>%{y}</b>"
+            "<br>Importance: %{x:.2f}%"
+            "<br>Fitur teknis: %{customdata[0]}"
+            "<br>Sumber: %{customdata[1]}"
+            "<extra></extra>"
+        ),
+    ))
+
+    fig_importance.update_layout(
+        height=max(585, int(len(importance_df) * 27 + 105)),
+        title=dict(text=""),
+        plot_bgcolor="#eef7ff",
+        paper_bgcolor="rgba(255,255,255,0)",
+        font=dict(color="#0f2a5f", size=11),
+        xaxis_title="Importance (%)",
+        yaxis_title="Fitur",
+        bargap=0.28,
+        margin=dict(l=18, r=92, t=18, b=48),
+        hoverlabel=dict(bgcolor="#ffffff", font_color="#0f2a5f"),
+    )
+    fig_importance.update_xaxes(
+        range=[0, max(max_importance * 1.16, 1.0)],
+        showgrid=True,
+        gridcolor="rgba(148,163,184,.18)",
+        zeroline=False,
+        ticksuffix="",
+        tickfont=dict(size=10, color="#64748b"),
+        title_font=dict(size=10, color="#64748b"),
+    )
+    fig_importance.update_yaxes(
+        showgrid=False,
+        tickfont=dict(size=9.5, color="#64748b"),
+        title_font=dict(size=10, color="#64748b"),
+        automargin=True,
     )
 
-    st.markdown('<div class="feature-importance-spacer"></div>', unsafe_allow_html=True)
-    _render_feature_importance_chart(
-        xgb_df,
-        "Feature Importance XGBoost Residual — Gain",
-        "#38bdf8",
+    st.plotly_chart(
+        fig_importance,
+        use_container_width=True,
+        config={"displayModeBar": False, "responsive": True},
     )
 
 
@@ -2778,23 +2907,40 @@ elif selected_menu == "Prediksi TWP90":
 
 
 elif selected_menu == "Evaluasi Model":
-    st.markdown('<div class="section-title" style="margin-top:1rem;">Evaluasi Model</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="section-help">Pilih evaluasi performa prediksi atau kontribusi fitur pada komponen model hybrid.</div>',
+        '<div class="section-title" style="margin-top:1rem;">Evaluasi Model</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="section-help">Pilih tampilan evaluasi</div>',
         unsafe_allow_html=True,
     )
 
-    # Menu evaluasi dibuat horizontal seperti menu Hasil Prediksi/Grafik Tren, bukan dropdown.
-    tab_eval_prediction, tab_eval_importance = st.tabs([
-        "Evaluasi aktual vs prediksi",
-        "Feature importance hybrid",
-    ])
+    with st.container(border=True):
+        st.markdown(
+            '<div class="evaluation-selector-marker"></div>',
+            unsafe_allow_html=True,
+        )
+        evaluation_view = st.selectbox(
+            "Pilih tampilan evaluasi",
+            options=[
+                "Feature Importance Model Hybrid",
+                "Evaluasi Aktual vs Prediksi Hybrid",
+            ],
+            index=0,
+            label_visibility="collapsed",
+            key="evaluation_view_selector",
+        )
 
-    active_eval_summary, active_eval_detail, active_eval_scale, active_eval_source = get_active_evaluation_dataset(eval_raw)
+    active_eval_summary, active_eval_detail, active_eval_scale, active_eval_source = (
+        get_active_evaluation_dataset(eval_raw)
+    )
 
-    with tab_eval_prediction:
-        show_eval_panel(active_eval_summary, active_eval_detail, active_eval_source)
-
-    with tab_eval_importance:
-        st.markdown('<div class="feature-importance-spacer"></div>', unsafe_allow_html=True)
+    if evaluation_view == "Feature Importance Model Hybrid":
         show_hybrid_feature_importance()
+    else:
+        show_eval_panel(
+            active_eval_summary,
+            active_eval_detail,
+            active_eval_source,
+        )
