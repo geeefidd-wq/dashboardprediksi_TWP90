@@ -1576,15 +1576,12 @@ div.stButton > button:hover, div.stDownloadButton > button:hover, div.stFormSubm
 
 /* Form Input & Element Interaktif */
 [data-testid="stNumberInput"] input {
-    border-radius:14px !important;
-    border:1px solid #bfdbfe !important;
-    background:#ffffff !important;
-    background-color:#ffffff !important;
-    color:#0f2a5f !important;
-    font-weight:800 !important;
+    border-radius:14px !important; border:1px solid #bfdbfe !important; background:#ffffff !important;
+    color:#0f2a5f !important; font-weight:800 !important;
 }
 [data-testid="stDateInput"] div[data-baseweb="input"] > div,
 [data-testid="stDateInput"] input,
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
 [data-testid="stTextInput"] input {
     border-radius:14px !important;
     border-color:#bfdbfe !important;
@@ -1593,50 +1590,29 @@ div.stButton > button:hover, div.stDownloadButton > button:hover, div.stFormSubm
     color:#0f2a5f !important;
     font-weight:800 !important;
 }
-[data-testid="stDateInput"] div[data-baseweb="input"] {
-    background:#ffffff !important;
-    background-color:#ffffff !important;
-    border-radius:14px !important;
-}
-
-/* Selectbox Evaluasi: area pilihan tertutup dibuat putih penuh. */
-[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
-[data-testid="stSelectbox"] div[data-baseweb="select"] > div:first-child,
-[data-testid="stSelectbox"] div[role="button"] {
-    min-height:48px !important;
-    border:1px solid #bfdbfe !important;
-    border-radius:14px !important;
-    background:#ffffff !important;
-    background-color:#ffffff !important;
-    box-shadow:0 2px 8px rgba(15,42,95,.06) !important;
-}
-
-/* Hilangkan lapisan abu-abu/kusam bawaan BaseWeb di dalam selectbox. */
+[data-testid="stDateInput"] div[data-baseweb="input"],
 [data-testid="stSelectbox"] div[data-baseweb="select"],
 [data-testid="stSelectbox"] div[data-baseweb="select"] > div,
 [data-testid="stSelectbox"] div[data-baseweb="select"] > div > div,
-[data-testid="stSelectbox"] div[data-baseweb="select"] input {
+[data-testid="stSelectbox"] div[role="button"] {
     background:#ffffff !important;
     background-color:#ffffff !important;
+    border-radius:14px !important;
 }
-
-[data-testid="stSelectbox"] div[data-baseweb="select"] > div:hover,
-[data-testid="stSelectbox"] div[role="button"]:hover {
-    border-color:#60a5fa !important;
-    background:#ffffff !important;
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+[data-testid="stSelectbox"] div[role="button"] {
+    min-height:48px !important;
+    border:1px solid #ffffff !important;
+    box-shadow:0 1px 3px rgba(15,42,95,.04) !important;
+}
+/* Menutup warna abu-abu bawaan BaseWeb pada control selectbox. */
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div:first-child,
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div:first-child > div {
     background-color:#ffffff !important;
 }
-
-[data-testid="stSelectbox"] div[data-baseweb="select"] > div:focus-within {
-    border-color:#2563eb !important;
-    box-shadow:0 0 0 3px rgba(37,99,235,.14), 0 2px 8px rgba(15,42,95,.06) !important;
-}
-
 [data-testid="stSelectbox"] span,
 [data-testid="stSelectbox"] input {
     color:#0f2a5f !important;
-    -webkit-text-fill-color:#0f2a5f !important;
-    font-weight:800 !important;
 }
 [data-testid="stDateInput"] svg,
 [data-testid="stSelectbox"] svg {
@@ -1644,31 +1620,20 @@ div.stButton > button:hover, div.stDownloadButton > button:hover, div.stFormSubm
     fill:#0f2a5f !important;
 }
 
-/* Daftar opsi dropdown juga putih saat dibuka. */
-div[data-baseweb="popover"],
-div[data-baseweb="popover"] > div,
-div[data-baseweb="popover"] ul,
-div[data-baseweb="menu"],
-div[data-baseweb="menu"] > div,
+/* Dropdown Evaluasi/Feature: putih, termasuk daftar opsi saat dibuka */
+div[data-baseweb="select"] ul,
+div[data-baseweb="select"],
 div[role="listbox"] {
     background:#ffffff !important;
     background-color:#ffffff !important;
 }
-div[data-baseweb="popover"] > div {
-    border:1px solid #bfdbfe !important;
-    border-radius:14px !important;
-    box-shadow:0 14px 34px rgba(15,42,95,.14) !important;
-    overflow:hidden !important;
-}
 div[role="option"] {
     background:#ffffff !important;
-    background-color:#ffffff !important;
     color:#0f2a5f !important;
 }
 div[role="option"]:hover,
 div[role="option"][aria-selected="true"] {
     background:#eff6ff !important;
-    background-color:#eff6ff !important;
     color:#0f2a5f !important;
 }
 
