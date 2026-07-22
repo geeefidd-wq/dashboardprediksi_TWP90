@@ -1307,231 +1307,43 @@ def format_feature_label(feature_name):
     return " ".join(label.split())
 
 
-def _normalized_feature_key(value):
-    """Normalisasi nama parameter agar fitur artifact dan nama parameter model dapat dicocokkan."""
-    return "".join(ch.lower() for ch in str(value) if ch.isalnum())
-
-
-def _extract_sarimax_named_parameters(model):
-    """Ambil pasangan nama parameter dan koefisien dari pmdarima/statsmodels secara aman."""
-    result_obj = getattr(model, "arima_res_", model)
-    params = getattr(result_obj, "params", None)
-    if callable(params):
-        try:
-            params = params()
-        except Exception:
-            params = None
-
-    if params is None:
-        params = getattr(model, "params", None)
-        if callable(params):
-            try:
-                params = params()
-            except Exception:
-                params = None
-
-    if params is None:
-        return pd.Series(dtype=float), []
-
-    if isinstance(params, pd.Series):
-        param_series = pd.to_numeric(params, errors="coerce")
-        names = [str(v) for v in param_series.index]
-        param_series.index = names
-    else:
-        values = np.asarray(params, dtype=float).reshape(-1)
-        names = getattr(result_obj, "param_names", None)
-        if names is None and hasattr(result_obj, "model"):
-            names = getattr(result_obj.model, "param_names", None)
-        if names is None:
-            names = getattr(model, "param_names", None)
-        names = list(names or [])
-        if len(names) != len(values):
-            names = [f"param_{i}" for i in range(len(values))]
-        param_series = pd.Series(values, index=[str(v) for v in names], dtype=float)
-
-    exog_names = []
-    for obj in [getattr(result_obj, "model", None), getattr(model, "model", None), result_obj, model]:
-        if obj is None:
-            continue
-        candidate = getattr(obj, "exog_names", None)
-        if candidate is not None:
-            exog_names = [str(v) for v in list(candidate)]
-            if exog_names:
-                break
-
-    return param_series.dropna(), exog_names
-
-
-def _build_sarimax_history_features(raw_history, artifacts, cfg, sarimax_cols):
-    """Bangun matriks fitur historis yang sama dengan input SARIMAX untuk standardisasi koefisien."""
-    if raw_history is None or raw_history.empty or not sarimax_cols:
-        return pd.DataFrame()
-
-    differencing_orders = artifacts.get("differencing_orders_exog") or cfg.get("differencing_orders_exog")
-    exog_lags_config = artifacts.get("exog_lags_config") or cfg.get("exog_lags_config")
-    if not differencing_orders or not exog_lags_config:
-        return pd.DataFrame()
-
-    try:
-        ensure_raw_history_has_required_exog(raw_history, differencing_orders)
-        stationary = prepare_stationary_exog_from_raw(raw_history, differencing_orders)
-        features = build_features_from_stationary(stationary, exog_lags_config)
-        X_hist = features.reindex(columns=sarimax_cols).copy()
-        for col in X_hist.columns:
-            X_hist[col] = pd.to_numeric(X_hist[col], errors="coerce")
-        return X_hist.dropna(how="all")
-    except Exception:
-        return pd.DataFrame()
-
-
-def get_sarimax_feature_importance(artifacts, cfg, raw_history, top_n=20):
-    """Hitung importance SARIMAX dari dampak koefisien terstandardisasi.
-
-    Nilai dasar: abs(koefisien × simpangan baku fitur). Pendekatan ini lebih tepat
-    daripada membandingkan koefisien mentah karena setiap variabel memiliki skala berbeda.
-    Importance kemudian dinormalisasi menjadi 100% di dalam komponen SARIMAX.
-    """
-    model = artifacts.get("final_sarimax")
-    sarimax_cols = artifacts.get("exog_cols_sarimax") or cfg.get("sarimax_exog_cols", [])
-    if model is None or not sarimax_cols:
-        return pd.DataFrame()
-
-    param_series, exog_names = _extract_sarimax_named_parameters(model)
-    if param_series.empty:
-        return pd.DataFrame()
-
-    direct_map = {str(name): float(value) for name, value in param_series.items()}
-    normalized_map = {_normalized_feature_key(name): float(value) for name, value in param_series.items()}
-
-    # Beberapa wrapper hanya menyediakan daftar nama eksogen pada objek model.
-    # Jika nama parameter generik tetapi jumlah parameter memungkinkan, hindari pemetaan
-    # posisi yang spekulatif dan hanya gunakan nama yang benar-benar dapat dicocokkan.
-    exog_key_map = {_normalized_feature_key(name): name for name in exog_names}
-
-    # Fallback terurut untuk model yang menyimpan nama eksogen generik seperti x1, x2, ...
-    # Urutan exog_names pada statsmodels/pmdarima mengikuti urutan kolom X saat fitting.
-    ordered_fallback = {}
-    if exog_names and len(exog_names) == len(sarimax_cols):
-        ordered_values = []
-        for exog_name in exog_names:
-            value = direct_map.get(exog_name)
-            if value is None:
-                value = normalized_map.get(_normalized_feature_key(exog_name))
-            ordered_values.append(value)
-        if all(value is not None and np.isfinite(value) for value in ordered_values):
-            ordered_fallback = {feature: float(value) for feature, value in zip(sarimax_cols, ordered_values)}
-
-    if not ordered_fallback:
-        generic_x_params = []
-        for param_name, value in param_series.items():
-            normalized_name = str(param_name).strip().lower()
-            if normalized_name.startswith("x") and normalized_name[1:].isdigit():
-                generic_x_params.append((int(normalized_name[1:]), float(value)))
-        generic_x_params.sort(key=lambda item: item[0])
-        if len(generic_x_params) == len(sarimax_cols):
-            ordered_fallback = {
-                feature: coefficient
-                for feature, (_, coefficient) in zip(sarimax_cols, generic_x_params)
-            }
-
-    rows = []
-    for feature in sarimax_cols:
-        coefficient = None
-        if feature in direct_map:
-            coefficient = direct_map[feature]
-        else:
-            feature_key = _normalized_feature_key(feature)
-            if feature_key in normalized_map:
-                coefficient = normalized_map[feature_key]
-            elif feature_key in exog_key_map:
-                exog_name = exog_key_map[feature_key]
-                if exog_name in direct_map:
-                    coefficient = direct_map[exog_name]
-                elif _normalized_feature_key(exog_name) in normalized_map:
-                    coefficient = normalized_map[_normalized_feature_key(exog_name)]
-
-        if coefficient is None and feature in ordered_fallback:
-            coefficient = ordered_fallback[feature]
-
-        if coefficient is not None and np.isfinite(coefficient):
-            rows.append({"Feature": feature, "Coefficient": float(coefficient)})
-
-    if not rows:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(rows)
-    X_hist = _build_sarimax_history_features(raw_history, artifacts, cfg, sarimax_cols)
-    if not X_hist.empty:
-        feature_std = X_hist.std(axis=0, ddof=0, numeric_only=True)
-        df["Feature_Std"] = df["Feature"].map(feature_std).fillna(0.0)
-        df["Importance"] = df["Coefficient"].abs() * df["Feature_Std"].abs()
-    else:
-        df["Feature_Std"] = np.nan
-        df["Importance"] = df["Coefficient"].abs()
-
-    # Jika seluruh fitur konstan/tidak memiliki standar deviasi yang usable,
-    # gunakan besar koefisien sebagai fallback yang transparan.
-    if float(df["Importance"].fillna(0.0).sum()) <= 0:
-        df["Importance"] = df["Coefficient"].abs()
-        importance_type = "absolute coefficient"
-    else:
-        importance_type = "standardized coefficient effect"
-
-    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=["Importance"])
-    df = df[df["Importance"] > 0].copy()
-    if df.empty:
-        return pd.DataFrame()
-
-    total = float(df["Importance"].sum())
-    df["Importance_%"] = df["Importance"] / total * 100.0
-    df["Feature_Label"] = df["Feature"].apply(format_feature_label)
-    df["Importance_Type"] = importance_type
-    df["Component"] = "SARIMAX"
-    return (
-        df.sort_values("Importance_%", ascending=False)
-        .head(int(top_n))
-        .sort_values("Importance_%", ascending=True)
-    )
-
-
-def get_xgb_feature_importance(artifacts, cfg, top_n=20):
-    """Ambil feature importance komponen XGBoost yang memodelkan residual SARIMAX."""
+def get_hybrid_feature_importance(artifacts, cfg, top_n=20):
+    """Mengambil feature importance dari komponen XGBoost residual pada model hybrid."""
     model = artifacts.get("final_xgb")
     feature_cols = artifacts.get("final_xgb_feature_cols") or cfg.get("xgb_final_feature_cols") or []
     if model is None:
         return pd.DataFrame()
 
-    df = pd.DataFrame()
+    importance_values = None
     importance_type = "gain"
 
-    # Prioritaskan gain dari booster karena merepresentasikan peningkatan objective
-    # saat fitur dipakai untuk split. Fallback ke feature_importances_ bila diperlukan.
-    try:
-        booster = model.get_booster()
-        score = booster.get_score(importance_type="gain")
-        if not score:
-            score = booster.get_score(importance_type="weight")
-            importance_type = "weight"
-        rows = []
-        for key, value in score.items():
-            if str(key).startswith("f") and str(key)[1:].isdigit() and feature_cols:
-                idx = int(str(key)[1:])
-                feature = feature_cols[idx] if idx < len(feature_cols) else str(key)
-            else:
-                feature = str(key)
-            rows.append({"Feature": feature, "Importance": float(value)})
-        df = pd.DataFrame(rows)
-    except Exception:
-        df = pd.DataFrame()
-
-    if df.empty and hasattr(model, "feature_importances_"):
+    if hasattr(model, "feature_importances_"):
         try:
-            importance_values = np.asarray(model.feature_importances_, dtype=float).reshape(-1)
-            if feature_cols and len(feature_cols) == len(importance_values):
-                df = pd.DataFrame({"Feature": feature_cols, "Importance": importance_values})
-                importance_type = "feature_importances_"
+            importance_values = np.asarray(model.feature_importances_, dtype=float)
+            importance_type = "feature_importances_"
         except Exception:
-            df = pd.DataFrame()
+            importance_values = None
+
+    if importance_values is not None and len(feature_cols) == len(importance_values):
+        df = pd.DataFrame({"Feature": feature_cols, "Importance": importance_values})
+    else:
+        try:
+            booster = model.get_booster()
+            score = booster.get_score(importance_type="gain")
+            if not score:
+                score = booster.get_score(importance_type="weight")
+                importance_type = "weight"
+            rows = []
+            for key, value in score.items():
+                if key.startswith("f") and key[1:].isdigit() and feature_cols:
+                    idx = int(key[1:])
+                    feature = feature_cols[idx] if idx < len(feature_cols) else key
+                else:
+                    feature = key
+                rows.append({"Feature": feature, "Importance": float(value)})
+            df = pd.DataFrame(rows)
+        except Exception:
+            return pd.DataFrame()
 
     if df.empty:
         return pd.DataFrame()
@@ -1541,32 +1353,21 @@ def get_xgb_feature_importance(artifacts, cfg, top_n=20):
     if df.empty:
         return pd.DataFrame()
 
-    total = float(df["Importance"].sum())
-    df["Importance_%"] = df["Importance"] / total * 100.0
+    total = df["Importance"].sum()
+    df["Importance_%"] = (df["Importance"] / total * 100.0) if total > 0 else 0.0
     df["Feature_Label"] = df["Feature"].apply(format_feature_label)
     df["Importance_Type"] = importance_type
-    df["Component"] = "XGBoost residual"
-    return (
-        df.sort_values("Importance_%", ascending=False)
-        .head(int(top_n))
-        .sort_values("Importance_%", ascending=True)
-    )
+    return df.sort_values("Importance_%", ascending=False).head(int(top_n)).sort_values("Importance_%", ascending=True)
 
 
-def get_hybrid_feature_importance(artifacts, cfg, raw_history, top_n=20):
-    """Kembalikan importance kedua komponen model hybrid tanpa mencampur skala secara arbitrer."""
-    return {
-        "sarimax": get_sarimax_feature_importance(artifacts, cfg, raw_history, top_n=top_n),
-        "xgboost": get_xgb_feature_importance(artifacts, cfg, top_n=top_n),
-    }
-
-
-def _render_feature_importance_chart(importance_df, title, bar_color):
-    if importance_df is None or importance_df.empty:
+def show_hybrid_feature_importance():
+    importance_df = get_hybrid_feature_importance(artifacts, cfg, top_n=20)
+    st.markdown('<div class="section-title">Feature Importance Model Hybrid</div>', unsafe_allow_html=True)
+    if importance_df.empty:
         st.markdown(
-            f"""
+            """
             <div class="info-box">
-                {title} belum dapat ditampilkan karena nama fitur atau parameter importance tidak tersedia pada artifact model.
+                Feature importance belum dapat ditampilkan karena metadata fitur XGBoost atau atribut importance tidak tersedia pada artifact model.
             </div>
             """,
             unsafe_allow_html=True,
@@ -1579,210 +1380,23 @@ def _render_feature_importance_chart(importance_df, title, bar_color):
         orientation="h",
         text=[f"{v:.2f}%" for v in importance_df["Importance_%"]],
         textposition="outside",
-        marker=dict(color=bar_color),
-        customdata=np.stack([
-            importance_df["Feature"].astype(str),
-            importance_df["Importance_Type"].astype(str),
-        ], axis=-1),
-        hovertemplate=(
-            "%{y}<br>Importance relatif: %{x:.2f}%"
-            "<br>Fitur teknis: %{customdata[0]}"
-            "<br>Metode: %{customdata[1]}<extra></extra>"
-        ),
+        marker=dict(color=importance_df["Importance_%"], colorscale="Blues", showscale=False),
+        hovertemplate="%{y}<br>Importance: %{x:.2f}%<extra></extra>",
     ))
     fig_importance.update_layout(
-        height=max(420, int(len(importance_df) * 29 + 155)),
-        title=dict(text=title, x=0.01, xanchor="left"),
+        height=max(430, int(len(importance_df) * 28 + 180)),
+        title="Feature Importance Hybrid - XGBoost Residual",
         plot_bgcolor="rgba(240,247,255,1)",
         paper_bgcolor="rgba(255,255,255,0)",
         font=dict(color="#0f2a5f"),
-        xaxis_title="Importance relatif dalam komponen (%)",
-        yaxis_title="Fitur",
-        margin=dict(l=20, r=85, t=70, b=35),
-    )
-    fig_importance.update_xaxes(
-        range=[0, max(float(importance_df["Importance_%"].max()) * 1.22, 1.0)],
-        ticksuffix="%",
-    )
-    st.plotly_chart(
-        fig_importance,
-        use_container_width=True,
-        config={"displayModeBar": False, "responsive": True},
-    )
-
-
-def get_combined_hybrid_feature_importance(artifacts, cfg, raw_history, top_n=20):
-    """Gabungkan importance SARIMAX dan XGBoost ke satu tampilan model hybrid.
-
-    Masing-masing komponen lebih dahulu dinormalisasi di dalam komponennya.
-    Ketika kedua komponen tersedia, kontribusi tampilan diberi bobot seimbang
-    50:50. Jika hanya satu komponen tersedia, komponen tersebut memakai bobot 100%.
-    """
-    importance = get_hybrid_feature_importance(
-        artifacts,
-        cfg,
-        raw_history,
-        top_n=10_000,
-    )
-    sarimax_df = importance.get("sarimax", pd.DataFrame())
-    xgb_df = importance.get("xgboost", pd.DataFrame())
-
-    available_components = []
-    if sarimax_df is not None and not sarimax_df.empty:
-        available_components.append(("SARIMAX", sarimax_df))
-    if xgb_df is not None and not xgb_df.empty:
-        available_components.append(("XGBoost residual", xgb_df))
-
-    if not available_components:
-        return pd.DataFrame()
-
-    component_weight = 1.0 / len(available_components)
-    frames = []
-
-    for component_name, component_df in available_components:
-        part = component_df.copy()
-        part["Importance_%"] = pd.to_numeric(part["Importance_%"], errors="coerce")
-        part = part.dropna(subset=["Importance_%"])
-        part = part[part["Importance_%"] > 0].copy()
-        if part.empty:
-            continue
-
-        part["Hybrid_Importance_%"] = part["Importance_%"] * component_weight
-        part["Component_Source"] = component_name
-        frames.append(
-            part[[
-                "Feature",
-                "Feature_Label",
-                "Hybrid_Importance_%",
-                "Component_Source",
-            ]]
-        )
-
-    if not frames:
-        return pd.DataFrame()
-
-    combined = pd.concat(frames, ignore_index=True)
-    combined = (
-        combined.groupby(["Feature", "Feature_Label"], as_index=False)
-        .agg({
-            "Hybrid_Importance_%": "sum",
-            "Component_Source": lambda values: " + ".join(sorted(set(map(str, values)))),
-        })
-    )
-
-    combined = (
-        combined.sort_values("Hybrid_Importance_%", ascending=False)
-        .head(int(top_n))
-        .sort_values("Hybrid_Importance_%", ascending=True)
-        .reset_index(drop=True)
-    )
-    return combined
-
-
-def _hybrid_importance_bar_colors(n_rows):
-    """Palet biru bergradasi dari fitur kecil ke fitur paling dominan."""
-    palette = [
-        "#e7f2fa", "#dceef8", "#d0e9f5", "#c3e3f1", "#b5dced",
-        "#a7d5e9", "#98cde5", "#88c4df", "#77bad9", "#66b0d3",
-        "#55a6cc", "#449bc5", "#348fbd", "#2a83b5", "#2377ac",
-        "#1d6aa2", "#185d97", "#14508b", "#10427d", "#0b326b",
-    ]
-    n_rows = max(0, int(n_rows))
-    if n_rows <= len(palette):
-        return palette[-n_rows:] if n_rows else []
-
-    # Fallback bila jumlah batang diubah menjadi lebih dari 20.
-    return [
-        palette[min(int(i * (len(palette) - 1) / max(n_rows - 1, 1)), len(palette) - 1)]
-        for i in range(n_rows)
-    ]
-
-
-def show_hybrid_feature_importance():
-    importance_df = get_combined_hybrid_feature_importance(
-        artifacts,
-        cfg,
-        raw_history,
-        top_n=20,
-    )
-
-    st.markdown(
-        '<div class="section-title">Feature Importance Model Hybrid</div>',
-        unsafe_allow_html=True,
-    )
-
-    if importance_df is None or importance_df.empty:
-        st.markdown(
-            """
-            <div class="info-box">
-                Feature importance belum dapat ditampilkan. Pastikan artifact model
-                menyimpan parameter SARIMAX dan feature importance XGBoost.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        return
-
-    bar_colors = _hybrid_importance_bar_colors(len(importance_df))
-    max_importance = float(importance_df["Hybrid_Importance_%"].max())
-
-    fig_importance = go.Figure(go.Bar(
-        x=importance_df["Hybrid_Importance_%"],
-        y=importance_df["Feature_Label"],
-        orientation="h",
-        text=[f"{value:.2f}%" for value in importance_df["Hybrid_Importance_%"]],
-        textposition="outside",
-        cliponaxis=False,
-        marker=dict(
-            color=bar_colors,
-            line=dict(width=0),
-        ),
-        customdata=np.stack([
-            importance_df["Feature"].astype(str),
-            importance_df["Component_Source"].astype(str),
-        ], axis=-1),
-        hovertemplate=(
-            "<b>%{y}</b>"
-            "<br>Importance: %{x:.2f}%"
-            "<br>Fitur teknis: %{customdata[0]}"
-            "<br>Sumber: %{customdata[1]}"
-            "<extra></extra>"
-        ),
-    ))
-
-    fig_importance.update_layout(
-        height=max(585, int(len(importance_df) * 27 + 105)),
-        title=dict(text=""),
-        plot_bgcolor="#eef7ff",
-        paper_bgcolor="rgba(255,255,255,0)",
-        font=dict(color="#0f2a5f", size=11),
         xaxis_title="Importance (%)",
         yaxis_title="Fitur",
-        bargap=0.28,
-        margin=dict(l=18, r=92, t=18, b=48),
-        hoverlabel=dict(bgcolor="#ffffff", font_color="#0f2a5f"),
+        margin=dict(l=20, r=70, t=28, b=30),
     )
-    fig_importance.update_xaxes(
-        range=[0, max(max_importance * 1.16, 1.0)],
-        showgrid=True,
-        gridcolor="rgba(148,163,184,.18)",
-        zeroline=False,
-        ticksuffix="",
-        tickfont=dict(size=10, color="#64748b"),
-        title_font=dict(size=10, color="#64748b"),
-    )
-    fig_importance.update_yaxes(
-        showgrid=False,
-        tickfont=dict(size=9.5, color="#64748b"),
-        title_font=dict(size=10, color="#64748b"),
-        automargin=True,
-    )
+    fig_importance.update_xaxes(range=[0, max(importance_df["Importance_%"].max() * 1.18, 1)])
+    st.plotly_chart(fig_importance, use_container_width=True, config={"displayModeBar": False, "responsive": True})
 
-    st.plotly_chart(
-        fig_importance,
-        use_container_width=True,
-        config={"displayModeBar": False, "responsive": True},
-    )
+    # Tabel feature importance dihapus sesuai permintaan; evaluasi hanya menampilkan grafik dan caption.
 
 
 try:
@@ -2907,40 +2521,26 @@ elif selected_menu == "Prediksi TWP90":
 
 
 elif selected_menu == "Evaluasi Model":
-    st.markdown(
-        '<div class="section-title" style="margin-top:1rem;">Evaluasi Model</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div class="section-help">Pilih tampilan evaluasi</div>',
-        unsafe_allow_html=True,
-    )
-
     with st.container(border=True):
-        st.markdown(
-            '<div class="evaluation-selector-marker"></div>',
-            unsafe_allow_html=True,
-        )
-        evaluation_view = st.selectbox(
+        st.markdown('<div class="evaluation-selector-marker"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="evaluation-selector-title">Evaluasi Model</div>', unsafe_allow_html=True)
+        st.markdown('<div class="evaluation-selector-caption">Pilih tampilan evaluasi</div>', unsafe_allow_html=True)
+        eval_view_mode = st.selectbox(
             "Pilih tampilan evaluasi",
-            options=[
+            [
+                "Evaluasi Aktual vs Prediksi",
                 "Feature Importance Model Hybrid",
-                "Evaluasi Aktual vs Prediksi Hybrid",
             ],
             index=0,
+            key="evaluation_view_mode",
             label_visibility="collapsed",
-            key="evaluation_view_selector",
+            help="Pilih evaluasi aktual-prediksi atau grafik kontribusi fitur XGBoost residual.",
         )
 
-    active_eval_summary, active_eval_detail, active_eval_scale, active_eval_source = (
-        get_active_evaluation_dataset(eval_raw)
-    )
+    active_eval_summary, active_eval_detail, active_eval_scale, active_eval_source = get_active_evaluation_dataset(eval_raw)
 
-    if evaluation_view == "Feature Importance Model Hybrid":
-        show_hybrid_feature_importance()
+    if eval_view_mode == "Evaluasi Aktual vs Prediksi":
+        show_eval_panel(active_eval_summary, active_eval_detail, active_eval_source)
     else:
-        show_eval_panel(
-            active_eval_summary,
-            active_eval_detail,
-            active_eval_source,
-        )
+        st.markdown('<div class="feature-importance-spacer"></div>', unsafe_allow_html=True)
+        show_hybrid_feature_importance()
