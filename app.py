@@ -73,13 +73,68 @@ FRIENDLY_LABELS = {
 }
 
 COLUMN_HELP = {
-    "Outstanding Pinjaman (miliar RP)": "Isi sesuai satuan historis model, yaitu miliar rupiah.",
-    "BI-7Day-RR": "Isi angka persen asli. Contoh: 5,75% ditulis 5.75.",
-    "Inflasi": "Isi angka persen asli. Contoh: 2,92% ditulis 2.92.",
-    "PDB (miliar Rp)": "Isi sesuai satuan historis model, yaitu miliar rupiah.",
-    "Pertumbuhan Outstanding (YoY% atau MoM%)": "Isi angka persen asli. Contoh: 18,03% ditulis 18.03.",
-    "Indeks Keyakinan Konsumen (IKK)": "Isi angka indeks IKK sesuai data/estimasi bulan tersebut.",
-    "Nilai Tukar Rupiah terhadap USD": "Isi kurs rupiah terhadap USD sesuai skala historis model.",
+    "Outstanding Pinjaman (miliar RP)": (
+        "Isi angka penuh sesuai data model. Contoh: 98.540.000.000.000 ditulis "
+        "98540000000000 tanpa pemisah ribuan."
+    ),
+    "BI-7Day-RR": "Isi angka persen asli. Contoh: 4,75% ditulis 4.75.",
+    "Inflasi": "Isi angka persen asli. Contoh: 3,55% ditulis 3.55.",
+    "PDB (miliar Rp)": "Isi angka penuh tanpa pemisah ribuan. Contoh: 583.968.533 ditulis 583968533.",
+    "Pertumbuhan Outstanding (YoY% atau MoM%)": "Isi angka persen asli. Contoh: 25,52% ditulis 25.52.",
+    "Indeks Keyakinan Konsumen (IKK)": "Isi angka indeks. Contoh: 125,2 ditulis 125.2.",
+    "Nilai Tukar Rupiah terhadap USD": "Isi kurs dalam rupiah tanpa pemisah ribuan. Contoh: 16.786 ditulis 16786.",
+}
+
+# Spesifikasi tampilan dan langkah input disesuaikan dengan skala data contoh.
+NUMBER_INPUT_SPECS = {
+    TWP90_INPUT_COL: {
+        "step": 0.01,
+        "format": "%.2f",
+        "min_value": 0.01,
+        "max_value": 100.0,
+    },
+    "Outstanding Pinjaman (miliar RP)": {
+        "step": 10_000_000_000.0,
+        "format": "%.0f",
+        "min_value": 1.0,
+        "max_value": 1_000_000_000_000_000.0,
+    },
+    "Pertumbuhan Outstanding (YoY% atau MoM%)": {
+        "step": 0.01,
+        "format": "%.2f",
+        "min_value": -100.0,
+        "max_value": 500.0,
+    },
+    "BI-7Day-RR": {
+        "step": 0.01,
+        "format": "%.2f",
+        "min_value": 0.0,
+        "max_value": 100.0,
+    },
+    "Inflasi": {
+        "step": 0.01,
+        "format": "%.2f",
+        "min_value": -100.0,
+        "max_value": 500.0,
+    },
+    "PDB (miliar Rp)": {
+        "step": 1_000_000.0,
+        "format": "%.0f",
+        "min_value": 1.0,
+        "max_value": 10_000_000_000.0,
+    },
+    "Indeks Keyakinan Konsumen (IKK)": {
+        "step": 0.1,
+        "format": "%.1f",
+        "min_value": 0.1,
+        "max_value": 500.0,
+    },
+    "Nilai Tukar Rupiah terhadap USD": {
+        "step": 1.0,
+        "format": "%.0f",
+        "min_value": 1.0,
+        "max_value": 1_000_000.0,
+    },
 }
 
 
@@ -1165,17 +1220,69 @@ def rerun_dashboard():
         st.experimental_rerun()
 
 
-def input_step_for_column(col, percent_cols):
+def input_number_spec(col, percent_cols):
+    """Mengatur skala, desimal, dan batas number_input sesuai karakter data."""
+    if col in NUMBER_INPUT_SPECS:
+        return NUMBER_INPUT_SPECS[col].copy()
+
+    # Fallback untuk nama kolom lain yang mungkin berasal dari artifact/config.
     if col in percent_cols:
-        return 0.01
+        return {
+            "step": 0.01,
+            "format": "%.2f",
+            "min_value": -100.0,
+            "max_value": 500.0,
+        }
+
     label = FRIENDLY_LABELS.get(col, col).lower()
-    if "nilai tukar" in label or "usd" in label:
-        return 100.0
+    if "nilai tukar" in label or "usd" in label or "kurs" in label:
+        return {
+            "step": 1.0,
+            "format": "%.0f",
+            "min_value": 1.0,
+            "max_value": 1_000_000.0,
+        }
     if "ikk" in label or "indeks" in label:
-        return 1.0
-    if "pdb" in label or "outstanding" in label:
-        return 1000.0
-    return 1.0
+        return {
+            "step": 0.1,
+            "format": "%.1f",
+            "min_value": 0.1,
+            "max_value": 500.0,
+        }
+    if "pdb" in label:
+        return {
+            "step": 1_000_000.0,
+            "format": "%.0f",
+            "min_value": 1.0,
+            "max_value": 10_000_000_000.0,
+        }
+    if "outstanding" in label:
+        return {
+            "step": 10_000_000_000.0,
+            "format": "%.0f",
+            "min_value": 1.0,
+            "max_value": 1_000_000_000_000_000.0,
+        }
+    return {
+        "step": 1.0,
+        "format": "%.0f",
+        "min_value": None,
+        "max_value": None,
+    }
+
+
+def number_input_kwargs(col, percent_cols):
+    """Menghasilkan keyword argument yang aman untuk st.number_input."""
+    spec = input_number_spec(col, percent_cols)
+    kwargs = {
+        "step": float(spec["step"]),
+        "format": str(spec["format"]),
+    }
+    if spec.get("min_value") is not None:
+        kwargs["min_value"] = float(spec["min_value"])
+    if spec.get("max_value") is not None:
+        kwargs["max_value"] = float(spec["max_value"])
+    return kwargs
 
 
 def validate_required_prediction_inputs(input_df, exog_cols, percent_cols, target_input_col=None):
@@ -2141,10 +2248,9 @@ elif selected_menu == "Prediksi TWP90":
                 row[TWP90_INPUT_COL] = st.number_input(
                     "TWP90 aktual bulan ini (%) *",
                     value=cached_input_value(month, TWP90_INPUT_COL, None),
-                    step=0.01,
-                    format="%.2f",
-                    help="Isi nilai TWP90 aktual periode input dalam angka persen asli. Contoh: 4,32% ditulis 4.32.",
+                    help="Isi nilai TWP90 aktual dalam persen asli. Contoh: 4,38% ditulis 4.38.",
                     key=f"num_{current_signature}_{month_key}_{TWP90_INPUT_COL}",
+                    **number_input_kwargs(TWP90_INPUT_COL, percent_cols),
                 )
 
                 input_columns = st.columns(2)
@@ -2156,10 +2262,9 @@ elif selected_menu == "Prediksi TWP90":
                         row[col] = st.number_input(
                             f"{make_display_name(col, percent_cols)} *",
                             value=default_value,
-                            step=input_step_for_column(col, percent_cols),
-                            format="%.2f",
                             help=COLUMN_HELP.get(col, "Isi sesuai skala historis model."),
                             key=f"num_{current_signature}_{month_key}_{col}",
+                            **number_input_kwargs(col, percent_cols),
                         )
                 input_rows.append(row)
 
