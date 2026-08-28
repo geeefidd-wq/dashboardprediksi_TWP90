@@ -74,7 +74,29 @@ def _missing_file_message(path: str) -> str:
 def load_artifacts():
     if not os.path.exists(MODEL_PATH):
         raise FileNotFoundError(_missing_file_message(MODEL_PATH))
-    return joblib.load(MODEL_PATH)
+    artifacts = joblib.load(MODEL_PATH)
+    # Fix compatibility pmdarima ARIMA
+    if isinstance(artifacts, dict):
+        sarimax = artifacts.get("final_sarimax")
+        if sarimax is not None:
+            try:
+                if hasattr(sarimax, "arima_res_"):
+                    sarimax.arima_res_.model = sarimax.arima_res_.model
+            except Exception:
+                pass
+            # hapus parameter lama yang tidak dikenali
+            try:
+                if hasattr(sarimax, "kwargs"):
+                    forbidden = [
+                        "error_action",
+                        "suppress_warnings",
+                        "trace"
+                    ]
+                    for key in forbidden:
+                        sarimax.kwargs.pop(key, None)
+            except Exception:
+                pass
+    return artifacts
 @st.cache_data(show_spinner=False)
 def load_config():
     if not os.path.exists(CONFIG_PATH):
@@ -336,8 +358,29 @@ def ensure_raw_history_has_required_exog(raw_history, differencing_orders):
             "Kolom historis yang belum tersedia: " + ", ".join(missing_cols) + "."
         )
 def _predict_sarimax_one_step(sarimax_model, X_row, model_library):
-    if hasattr(sarimax_model, "predict") and model_library == "pmdarima.ARIMA":
-        pred = sarimax_model.predict(n_periods=1, X=X_row)
+    if model_library == "pmdarima.ARIMA":
+        try:
+            pred = sarimax_model.predict(
+                n_periods=1,
+                X=X_row
+            )
+        except TypeError:
+            # kompatibilitas pmdarima versi baru
+            pred = sarimax_model.predict(
+                n_periods=1,
+                exogenous=X_row
+            )
+    elif hasattr(sarimax_model, "forecast"):
+        pred = sarimax_model.forecast(
+            steps=1,
+            exog=X_row
+        )
+    else:
+        pred = sarimax_model.predict(
+            n_periods=1,
+            X=X_row
+        )
+    return float(np.asarray(pred).reshape(-1)[0])
     elif hasattr(sarimax_model, "forecast"):
         pred = sarimax_model.forecast(steps=1, exog=X_row)
     else:
@@ -1700,8 +1743,10 @@ elif selected_menu == "Prediksi TWP90":
             st.session_state["prediction_target_date_persisted"] = selected_target_date
             st.success("Prediksi berhasil dihitung. Hasil dapat dilihat pada panel di bawah.")
         except Exception as e:
-            st.session_state.pop("prediction_payload", None)
-            error_message = str(e)
+        # jangan hapus input sebelumnya
+            if "prediction_payload" not in st.session_state:
+                st.session_state["prediction_payload"] = {}
+                error_message = str(e)
             if "Hasil prediksi tidak ditemukan" not in error_message:
                 error_message = f"Prediksi gagal dihitung: {e}"
             st.error(error_message)
