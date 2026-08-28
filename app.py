@@ -73,27 +73,8 @@ def _missing_file_message(path: str) -> str:
 @st.cache_resource(show_spinner=False)
 def load_artifacts():
     if not os.path.exists(MODEL_PATH):
-        raise FileNotFoundError(
-            _missing_file_message(MODEL_PATH)
-        )
-    artifacts = joblib.load(MODEL_PATH)
-    required_keys = [
-        "final_sarimax",
-        "final_xgb",
-        "final_xgb_feature_cols",
-        "exog_cols_sarimax",
-        "final_residual_train_log"
-    ]
-    missing = [
-        k for k in required_keys
-        if k not in artifacts
-    ]
-    if missing:
-        raise ValueError(
-            "Artifact model tidak lengkap: "
-            + ", ".join(missing)
-        )
-    return artifacts
+        raise FileNotFoundError(_missing_file_message(MODEL_PATH))
+    return joblib.load(MODEL_PATH)
 @st.cache_data(show_spinner=False)
 def load_config():
     if not os.path.exists(CONFIG_PATH):
@@ -354,96 +335,25 @@ def ensure_raw_history_has_required_exog(raw_history, differencing_orders):
             "raw_history.csv lengkap diperlukan untuk membentuk differencing dan lag variabel eksternal. "
             "Kolom historis yang belum tersedia: " + ", ".join(missing_cols) + "."
         )
-def clean_pmdarima_model(model):
-    """
-    Membersihkan parameter lama pmdarima
-    yang menyebabkan error saat predict.
-    """
-    try:
-        if hasattr(model, "arima_res_"):
-            # hapus kwargs lama jika masih tersimpan
-            if hasattr(model.arima_res_, "model"):
-                pass
-        if hasattr(model, "fit_with_exog_"):
-            model.fit_with_exog_ = None
-        # cek parameter model lama
-        if hasattr(model, "kwargs"):
-            if isinstance(model.kwargs, dict):
-                model.kwargs.pop(
-                    "error_action",
-                    None
-                )
-        if hasattr(model, "sarimax_kwargs"):
-            if isinstance(model.sarimax_kwargs, dict):
-                model.sarimax_kwargs.pop(
-                    "error_action",
-                    None
-                )
-    except Exception:
-        pass
-    return model
-def _predict_sarimax_one_step(sarimax_model, X_row, model_library=None):
-    try:
-        sarimax_model = clean_pmdarima_model(
-            sarimax_model
-        )
-        pred = sarimax_model.predict(
-            n_periods=1,
-            X=X_row
-        )
-        return float(
-            np.asarray(
-                pred,
-                dtype=float
-            ).reshape(-1)[0]
-        )
-    except TypeError as e:
-        # fallback pmdarima lama
-        if "error_action" in str(e):
-            try:
-                from pmdarima.arima import ARIMA
-                params = sarimax_model.get_params()
-                params.pop(
-                    "error_action",
-                    None
-                )
-                new_model = ARIMA(
-                    **params
-                )
-                new_model.arima_res_ = sarimax_model.arima_res_
-                pred = new_model.predict(
-                    n_periods=1,
-                    X=X_row
-                )
-                return float(
-                    np.asarray(
-                        pred,
-                        dtype=float
-                    ).reshape(-1)[0]
-                )
-            except Exception as inner:
-                raise RuntimeError(
-                    f"Gagal memperbaiki model SARIMAX: {inner}"
-                )
-        raise e
+def _predict_sarimax_one_step(sarimax_model, X_row, model_library):
+    if hasattr(sarimax_model, "predict") and model_library == "pmdarima.ARIMA":
+        pred = sarimax_model.predict(n_periods=1, X=X_row)
+    elif hasattr(sarimax_model, "forecast"):
+        pred = sarimax_model.forecast(steps=1, exog=X_row)
+    else:
+        pred = sarimax_model.predict(n_periods=1, X=X_row)
+    return float(np.asarray(pred, dtype=float).reshape(-1)[0])
 def _update_sarimax_with_actual(sarimax_model, actual_value, X_row):
-    sarimax_model = clean_pmdarima_model(
-        sarimax_model
-    )
-    if not hasattr(
-        sarimax_model,
-        "update"
-    ):
+    if not hasattr(sarimax_model, "update"):
         return sarimax_model
+    y = np.asarray([float(actual_value)], dtype=float)
     try:
-        sarimax_model.update(
-            np.asarray(
-                [float(actual_value)]
-            ),
-            X=X_row
-        )
+        sarimax_model.update(y, X=X_row, maxiter=0)
     except Exception:
-        pass
+        try:
+            sarimax_model.update(y, X=X_row, maxiter=1)
+        except Exception:
+            sarimax_model.update(y, X=X_row)
     return sarimax_model
 def _predict_xgb_residual_one_step(model, X_base_row, residual_history, feature_columns, residual_target, residual_feature_cols, target_lags):
     idx = X_base_row.index[0]
@@ -529,8 +439,8 @@ def predict_hybrid_from_latest_input(raw_history, input_raw_exog, artifacts, cfg
     if X_xgb_base.isna().any().any():
         missing = X_xgb_base.columns[X_xgb_base.isna().any()].tolist()
         raise ValueError(f"Fitur XGBoost dasar belum lengkap: {missing}")
-    sarimax_model = clean_pmdarima_model(copy.deepcopy(artifacts["final_sarimax"]))
-    model_library = "pmdarima.ARIMA"
+    sarimax_model = copy.deepcopy(artifacts["final_sarimax"])
+    model_library = artifacts.get("model_library_sarimax", cfg.get("model_library_sarimax", "pmdarima.ARIMA"))
     residual_history = pd.Series(artifacts["final_residual_train_log"]).copy()
     residual_history.index = pd.to_datetime(residual_history.index).to_period("M").to_timestamp("M")
     residual_history.name = residual_target
@@ -1402,7 +1312,7 @@ hr {border-color:#cce0ff;}
 st.markdown(
     f"""
 <div class="hero">
-  <div class="hero-title">Dashboard Prediksi TWP90<br>P2p lending di Indonesia</div>
+  <div class="hero-title">Dashboard Prediksi TWP90<br>P2P lending di Indonesia</div>
   <div class="badge-row">
     <span class="badge">Data terakhir: {last_observed.strftime('%B %Y')}</span>
     <span class="badge">Prediksi mulai: {next_month.strftime('%B %Y')}</span>
