@@ -335,111 +335,26 @@ def ensure_raw_history_has_required_exog(raw_history, differencing_orders):
             "raw_history.csv lengkap diperlukan untuk membentuk differencing dan lag variabel eksternal. "
             "Kolom historis yang belum tersedia: " + ", ".join(missing_cols) + "."
         )
-def _is_pmdarima_model(model):
-    """Deteksi model pmdarima dari class yang benar-benar dimuat."""
-    module_name = str(getattr(type(model), "__module__", "")).lower()
-    class_name = str(getattr(type(model), "__name__", "")).lower()
-    return "pmdarima" in module_name or class_name in {"arima", "autoarima"}
-
-
-def _predict_sarimax(model, X, steps=1, model_library=None):
-    """Forecast SARIMAX/ARIMA kompatibel dengan pmdarima dan statsmodels."""
-    if model is None:
-        raise ValueError("Model SARIMAX tidak tersedia pada artifact.")
-    steps = max(1, int(steps))
-    X = X.copy() if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
-    is_pmdarima = _is_pmdarima_model(model)
-    library_text = str(model_library or "").lower()
-    last_error = None
-
-    # pmdarima modern memakai X; versi lama memakai exogenous.
-    if is_pmdarima or ("pmdarima" in library_text and hasattr(model, "predict")):
-        for kwargs in (
-            {"n_periods": steps, "X": X},
-            {"n_periods": steps, "exogenous": X},
-        ):
-            try:
-                pred = model.predict(**kwargs)
-                return np.asarray(pred, dtype=float).reshape(-1)
-            except (TypeError, ValueError, KeyError) as exc:
-                last_error = exc
-        # Jika metadata salah tetapi object ternyata statsmodels, jangan berhenti.
-        if is_pmdarima:
-            raise RuntimeError(
-                "Model pmdarima gagal melakukan prediksi dengan variabel eksternal. "
-                f"Detail: {last_error}"
-            )
-
-    # statsmodels SARIMAX/ARIMA Results memakai forecast(steps, exog).
-    if hasattr(model, "forecast"):
-        try:
-            pred = model.forecast(steps=steps, exog=X)
-            return np.asarray(pred, dtype=float).reshape(-1)
-        except (TypeError, ValueError, KeyError) as exc:
-            last_error = exc
-            if hasattr(model, "get_forecast"):
-                try:
-                    pred = model.get_forecast(steps=steps, exog=X).predicted_mean
-                    return np.asarray(pred, dtype=float).reshape(-1)
-                except (TypeError, ValueError, KeyError) as exc2:
-                    last_error = exc2
-
-    # Fallback untuk wrapper statsmodels yang hanya mengekspos predict().
-    if hasattr(model, "predict"):
-        try:
-            nobs = int(
-                getattr(model, "nobs", 0)
-                or getattr(getattr(model, "model", None), "nobs", 0)
-                or 0
-            )
-            pred = model.predict(start=nobs, end=nobs + steps - 1, exog=X)
-            return np.asarray(pred, dtype=float).reshape(-1)
-        except (TypeError, ValueError, KeyError) as exc:
-            last_error = exc
-
-    raise RuntimeError(
-        "Model SARIMAX tidak kompatibel dengan API prediksi yang tersedia. "
-        f"Class={type(model).__module__}.{type(model).__name__}; "
-        f"model_library={model_library!r}; detail={last_error}"
-    )
-
-
 def _predict_sarimax_one_step(sarimax_model, X_row, model_library):
-    pred = _predict_sarimax(sarimax_model, X_row, steps=1, model_library=model_library)
-    if len(pred) == 0 or not np.isfinite(pred[0]):
-        raise ValueError("Model SARIMAX menghasilkan prediksi kosong atau tidak valid.")
-    return float(pred[0])
-
+    if hasattr(sarimax_model, "predict") and model_library == "pmdarima.ARIMA":
+        pred = sarimax_model.predict(n_periods=1, X=X_row)
+    elif hasattr(sarimax_model, "forecast"):
+        pred = sarimax_model.forecast(steps=1, exog=X_row)
+    else:
+        pred = sarimax_model.predict(n_periods=1, X=X_row)
+    return float(np.asarray(pred, dtype=float).reshape(-1)[0])
 def _update_sarimax_with_actual(sarimax_model, actual_value, X_row):
-    """Update state ARIMA bila API model mendukungnya; gagal update tidak memblokir prediksi."""
     if not hasattr(sarimax_model, "update"):
         return sarimax_model
     y = np.asarray([float(actual_value)], dtype=float)
-    is_pmdarima = _is_pmdarima_model(sarimax_model)
-    attempts = []
-    if is_pmdarima:
-        attempts.extend([
-            lambda: sarimax_model.update(y, X=X_row, maxiter=0),
-            lambda: sarimax_model.update(y, X=X_row, maxiter=1),
-            lambda: sarimax_model.update(y, X=X_row),
-            lambda: sarimax_model.update(y, exogenous=X_row),
-        ])
-    else:
-        attempts.extend([
-            lambda: sarimax_model.append(y, exog=X_row, refit=False),
-            lambda: sarimax_model.extend(y, exog=X_row, refit=False),
-            lambda: sarimax_model.update(y, exog=X_row),
-        ])
-    for attempt in attempts:
+    try:
+        sarimax_model.update(y, X=X_row, maxiter=0)
+    except Exception:
         try:
-            updated = attempt()
-            return updated if updated is not None else sarimax_model
+            sarimax_model.update(y, X=X_row, maxiter=1)
         except Exception:
-            continue
-    # Update state hanya diperlukan untuk prediksi berantai. Jika object tidak
-    # mendukung update, kembalikan object awal agar prediksi tetap selesai.
+            sarimax_model.update(y, X=X_row)
     return sarimax_model
-
 def _predict_xgb_residual_one_step(model, X_base_row, residual_history, feature_columns, residual_target, residual_feature_cols, target_lags):
     idx = X_base_row.index[0]
     temp = pd.concat([
@@ -617,7 +532,7 @@ def predict_hybrid_future(raw_history, future_raw_exog, artifacts, cfg):
     residual_target = artifacts.get("residual_target") or cfg.get("residual_target", RESIDUAL_TARGET_DEFAULT)
     residual_feature_cols = artifacts.get("residual_feature_cols") or cfg.get("residual_feature_cols", [])
     target_lags = artifacts.get("target_lags") or cfg.get("target_lags", [1, 3, 6])
-    xgb_base_cols = artifacts.get("xgb_base_cols") or cfg.get("xgb_base_cols") or derive_xgb_base_cols_from_final(xgb_final_cols, residual_feature_cols)
+    xgb_base_cols = artifacts.get("xgb_base_cols") or artifacts.get("xgb_base_cols") or derive_xgb_base_cols_from_final(xgb_final_cols, residual_feature_cols)
     if not sarimax_cols:
         raise ValueError("Daftar fitur SARIMAX tidak ditemukan pada artifact/config.")
     if not xgb_base_cols or not xgb_final_cols:
@@ -633,14 +548,13 @@ def predict_hybrid_future(raw_history, future_raw_exog, artifacts, cfg):
     sarimax_model = artifacts["final_sarimax"]
     horizon = len(future_months)
     model_library = artifacts.get("model_library_sarimax", cfg.get("model_library_sarimax", "pmdarima.ARIMA"))
-    sarimax_pred = _predict_sarimax(sarimax_model, X_sarimax, steps=horizon, model_library=model_library)
-    if len(sarimax_pred) != horizon:
-        raise ValueError(
-            f"Jumlah hasil prediksi SARIMAX ({len(sarimax_pred)}) tidak sesuai horizon ({horizon})."
-        )
-    if not np.isfinite(sarimax_pred).all():
-        raise ValueError("Model SARIMAX menghasilkan nilai NaN/inf.")
-    sarimax_pred_log = pd.Series(sarimax_pred, index=future_months, name="Prediksi_SARIMAX_Log")
+    if hasattr(sarimax_model, "predict") and model_library == "pmdarima.ARIMA":
+        sarimax_pred = sarimax_model.predict(n_periods=horizon, X=X_sarimax)
+    elif hasattr(sarimax_model, "forecast"):
+        sarimax_pred = sarimax_model.forecast(steps=horizon, exog=X_sarimax)
+    else:
+        sarimax_pred = sarimax_model.predict(n_periods=horizon, X=X_sarimax)
+    sarimax_pred_log = pd.Series(np.asarray(sarimax_pred, dtype=float).reshape(-1), index=future_months, name="Prediksi_SARIMAX_Log")
     xgb_resid_log, X_xgb_final_used = predict_xgb_residual_recursive(
         artifacts["final_xgb"],
         X_xgb_base,
