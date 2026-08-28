@@ -335,14 +335,37 @@ def ensure_raw_history_has_required_exog(raw_history, differencing_orders):
             "raw_history.csv lengkap diperlukan untuk membentuk differencing dan lag variabel eksternal. "
             "Kolom historis yang belum tersedia: " + ", ".join(missing_cols) + "."
         )
-def _predict_sarimax_one_step(sarimax_model, X_row, model_library):
-    if hasattr(sarimax_model, "predict") and model_library == "pmdarima.ARIMA":
-        pred = sarimax_model.predict(n_periods=1, X=X_row)
-    elif hasattr(sarimax_model, "forecast"):
-        pred = sarimax_model.forecast(steps=1, exog=X_row)
-    else:
-        pred = sarimax_model.predict(n_periods=1, X=X_row)
-    return float(np.asarray(pred, dtype=float).reshape(-1)[0])
+def _predict_sarimax_one_step(sarimax_model, X_row, model_library=None):
+    try:
+        # Model dari hybrid_twp90_model.joblib adalah pmdarima ARIMA
+        if isinstance(sarimax_model, object) and hasattr(sarimax_model, "predict"):
+            pred = sarimax_model.predict(
+                n_periods=1,
+                X=X_row
+            )
+        elif hasattr(sarimax_model, "forecast"):
+            pred = sarimax_model.forecast(
+                steps=1,
+                exog=X_row
+            )
+        else:
+            raise ValueError(
+                "Model SARIMAX tidak memiliki method prediksi yang sesuai."
+            )
+        return float(
+            np.asarray(pred, dtype=float)
+            .reshape(-1)[0]
+        )
+    except TypeError as e:
+        if "error_action" in str(e):
+            raise RuntimeError(
+                """
+                Model SARIMAX menerima parameter lama error_action.
+                Silakan gunakan pmdarima sesuai requirements.txt
+                atau reload model menggunakan environment training.
+                """
+            )
+        raise e
 def _update_sarimax_with_actual(sarimax_model, actual_value, X_row):
     if not hasattr(sarimax_model, "update"):
         return sarimax_model
