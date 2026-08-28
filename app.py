@@ -73,8 +73,27 @@ def _missing_file_message(path: str) -> str:
 @st.cache_resource(show_spinner=False)
 def load_artifacts():
     if not os.path.exists(MODEL_PATH):
-        raise FileNotFoundError(_missing_file_message(MODEL_PATH))
-    return joblib.load(MODEL_PATH)
+        raise FileNotFoundError(
+            _missing_file_message(MODEL_PATH)
+        )
+    artifacts = joblib.load(MODEL_PATH)
+    required_keys = [
+        "final_sarimax",
+        "final_xgb",
+        "final_xgb_feature_cols",
+        "exog_cols_sarimax",
+        "final_residual_train_log"
+    ]
+    missing = [
+        k for k in required_keys
+        if k not in artifacts
+    ]
+    if missing:
+        raise ValueError(
+            "Artifact model tidak lengkap: "
+            + ", ".join(missing)
+        )
+    return artifacts
 @st.cache_data(show_spinner=False)
 def load_config():
     if not os.path.exists(CONFIG_PATH):
@@ -463,7 +482,7 @@ def predict_hybrid_from_latest_input(raw_history, input_raw_exog, artifacts, cfg
         missing = X_xgb_base.columns[X_xgb_base.isna().any()].tolist()
         raise ValueError(f"Fitur XGBoost dasar belum lengkap: {missing}")
     sarimax_model = copy.deepcopy(artifacts["final_sarimax"])
-    model_library = artifacts.get("model_library_sarimax", cfg.get("model_library_sarimax", "pmdarima.ARIMA"))
+    model_library = "pmdarima.ARIMA"
     residual_history = pd.Series(artifacts["final_residual_train_log"]).copy()
     residual_history.index = pd.to_datetime(residual_history.index).to_period("M").to_timestamp("M")
     residual_history.name = residual_target
