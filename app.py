@@ -343,17 +343,54 @@ def _predict_sarimax_one_step(sarimax_model, X_row, model_library):
     else:
         pred = sarimax_model.predict(n_periods=1, X=X_row)
     return float(np.asarray(pred, dtype=float).reshape(-1)[0])
+def _sanitize_sarimax_runtime_kwargs(sarimax_model):
+    """
+    Remove legacy/unsupported kwargs embedded in a serialized pmdarima ARIMA
+    model before calling update(). Older training environments could store
+    `error_action` inside `sarimax_kwargs`, while newer statsmodels/pmdarima
+    versions reject it during the internal refit performed by update().
+    """
+    if sarimax_model is None:
+        return sarimax_model
+
+    kwargs = getattr(sarimax_model, "sarimax_kwargs", None)
+    if isinstance(kwargs, dict) and "error_action" in kwargs:
+        cleaned = dict(kwargs)
+        cleaned.pop("error_action", None)
+        try:
+            sarimax_model.sarimax_kwargs = cleaned
+        except Exception:
+            pass
+    return sarimax_model
+
+
 def _update_sarimax_with_actual(sarimax_model, actual_value, X_row):
     if not hasattr(sarimax_model, "update"):
         return sarimax_model
+
+    sarimax_model = _sanitize_sarimax_runtime_kwargs(sarimax_model)
     y = np.asarray([float(actual_value)], dtype=float)
+
+    # update() internally refits the pmdarima model. The serialized model
+    # contains a legacy `error_action` kwarg that is not accepted by some
+    # runtime combinations of pmdarima/statsmodels. Retry once after removing
+    # that legacy kwarg so prediction remains compatible across environments.
     try:
         sarimax_model.update(y, X=X_row, maxiter=0)
-    except Exception:
+    except Exception as first_error:
+        sarimax_model = _sanitize_sarimax_runtime_kwargs(sarimax_model)
         try:
             sarimax_model.update(y, X=X_row, maxiter=1)
         except Exception:
-            sarimax_model.update(y, X=X_row)
+            try:
+                sarimax_model.update(y, X=X_row)
+            except Exception:
+                # If the runtime still reports the legacy keyword problem,
+                # surface the original error rather than hiding a genuine
+                # model/data error.
+                if "error_action" in str(first_error).lower():
+                    raise first_error
+                raise
     return sarimax_model
 def _predict_xgb_residual_one_step(model, X_base_row, residual_history, feature_columns, residual_target, residual_feature_cols, target_lags):
     idx = X_base_row.index[0]
@@ -440,6 +477,7 @@ def predict_hybrid_from_latest_input(raw_history, input_raw_exog, artifacts, cfg
         missing = X_xgb_base.columns[X_xgb_base.isna().any()].tolist()
         raise ValueError(f"Fitur XGBoost dasar belum lengkap: {missing}")
     sarimax_model = copy.deepcopy(artifacts["final_sarimax"])
+    sarimax_model = _sanitize_sarimax_runtime_kwargs(sarimax_model)
     model_library = artifacts.get("model_library_sarimax", cfg.get("model_library_sarimax", "pmdarima.ARIMA"))
     residual_history = pd.Series(artifacts["final_residual_train_log"]).copy()
     residual_history.index = pd.to_datetime(residual_history.index).to_period("M").to_timestamp("M")
@@ -545,7 +583,7 @@ def predict_hybrid_future(raw_history, future_raw_exog, artifacts, cfg):
     if X_xgb_base.isna().any().any():
         missing = X_xgb_base.columns[X_xgb_base.isna().any()].tolist()
         raise ValueError(f"Fitur XGBoost dasar belum lengkap: {missing}")
-    sarimax_model = artifacts["final_sarimax"]
+    sarimax_model = _sanitize_sarimax_runtime_kwargs(artifacts["final_sarimax"])
     horizon = len(future_months)
     model_library = artifacts.get("model_library_sarimax", cfg.get("model_library_sarimax", "pmdarima.ARIMA"))
     if hasattr(sarimax_model, "predict") and model_library == "pmdarima.ARIMA":
