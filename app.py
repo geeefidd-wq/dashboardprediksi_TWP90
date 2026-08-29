@@ -70,11 +70,64 @@ def _missing_file_message(path: str) -> str:
         f"File tidak ditemukan: {path}. Pastikan artifact tersedia di folder model_artifacts "
         "atau satu folder dengan app.py."
     )
+def _sanitize_sarimax_legacy_kwargs(model):
+    """Remove legacy kwargs embedded in a serialized pmdarima ARIMA model.
+
+    Some saved pmdarima ARIMA artifacts contain ``error_action`` inside the
+    underlying statsmodels SARIMAX initialization metadata.  Newer
+    statsmodels versions reject that keyword during out-of-sample prediction
+    because ``error_action`` is a pmdarima option, not a SARIMAX option.
+
+    The cleanup is intentionally limited to serialized initialization
+    metadata; model coefficients/state are not changed.
+    """
+    if model is None:
+        return model
+
+    # pmdarima-level kwargs.
+    model_kwargs = getattr(model, "sarimax_kwargs", None)
+    if isinstance(model_kwargs, dict):
+        model_kwargs.pop("error_action", None)
+
+    arima_res = getattr(model, "arima_res_", None)
+    sm_model = getattr(arima_res, "model", None) if arima_res is not None else None
+    if sm_model is not None:
+        init_keys = getattr(sm_model, "_init_keys", None)
+        if isinstance(init_keys, (list, tuple)):
+            filtered_keys = [key for key in init_keys if key != "error_action"]
+            sm_model._init_keys = (
+                filtered_keys if isinstance(init_keys, list) else tuple(filtered_keys)
+            )
+
+        init_kwargs = getattr(sm_model, "_init_kwargs", None)
+        if isinstance(init_kwargs, dict):
+            init_kwargs.pop("error_action", None)
+
+    # statsmodels ResultsWrapper may keep a second copy of the initialization
+    # keywords used when cloning the model for future predictions.
+    results_obj = getattr(arima_res, "_results", None) if arima_res is not None else None
+    results_init_kwds = getattr(results_obj, "_init_kwds", None) if results_obj is not None else None
+    if isinstance(results_init_kwds, dict):
+        results_init_kwds.pop("error_action", None)
+
+    return model
+
+
 @st.cache_resource(show_spinner=False)
 def load_artifacts():
     if not os.path.exists(MODEL_PATH):
         raise FileNotFoundError(_missing_file_message(MODEL_PATH))
-    return joblib.load(MODEL_PATH)
+
+    artifacts = joblib.load(MODEL_PATH)
+
+    # Backward-compatibility cleanup for SARIMAX objects serialized with
+    # pmdarima metadata that is no longer accepted by recent statsmodels.
+    if isinstance(artifacts, dict):
+        for model_key in ("final_sarimax", "train_only_sarimax_for_evaluation"):
+            if model_key in artifacts:
+                artifacts[model_key] = _sanitize_sarimax_legacy_kwargs(artifacts[model_key])
+
+    return artifacts
 @st.cache_data(show_spinner=False)
 def load_config():
     if not os.path.exists(CONFIG_PATH):
@@ -336,6 +389,10 @@ def ensure_raw_history_has_required_exog(raw_history, differencing_orders):
             "Kolom historis yang belum tersedia: " + ", ".join(missing_cols) + "."
         )
 def _predict_sarimax_one_step(sarimax_model, X_row, model_library):
+    # Ensure an old serialized pmdarima artifact cannot forward the legacy
+    # ``error_action`` kwarg to statsmodels during prediction.
+    sarimax_model = _sanitize_sarimax_legacy_kwargs(sarimax_model)
+
     if hasattr(sarimax_model, "predict") and model_library == "pmdarima.ARIMA":
         pred = sarimax_model.predict(n_periods=1, X=X_row)
     elif hasattr(sarimax_model, "forecast"):
@@ -343,54 +400,21 @@ def _predict_sarimax_one_step(sarimax_model, X_row, model_library):
     else:
         pred = sarimax_model.predict(n_periods=1, X=X_row)
     return float(np.asarray(pred, dtype=float).reshape(-1)[0])
-def _sanitize_sarimax_runtime_kwargs(sarimax_model):
-    """
-    Remove legacy/unsupported kwargs embedded in a serialized pmdarima ARIMA
-    model before calling update(). Older training environments could store
-    `error_action` inside `sarimax_kwargs`, while newer statsmodels/pmdarima
-    versions reject it during the internal refit performed by update().
-    """
-    if sarimax_model is None:
-        return sarimax_model
-
-    kwargs = getattr(sarimax_model, "sarimax_kwargs", None)
-    if isinstance(kwargs, dict) and "error_action" in kwargs:
-        cleaned = dict(kwargs)
-        cleaned.pop("error_action", None)
-        try:
-            sarimax_model.sarimax_kwargs = cleaned
-        except Exception:
-            pass
-    return sarimax_model
-
-
 def _update_sarimax_with_actual(sarimax_model, actual_value, X_row):
+    # ``update`` may clone the underlying SARIMAX model as well, so apply the
+    # same compatibility cleanup before feeding the actual one-step value.
+    sarimax_model = _sanitize_sarimax_legacy_kwargs(sarimax_model)
+
     if not hasattr(sarimax_model, "update"):
         return sarimax_model
-
-    sarimax_model = _sanitize_sarimax_runtime_kwargs(sarimax_model)
     y = np.asarray([float(actual_value)], dtype=float)
-
-    # update() internally refits the pmdarima model. The serialized model
-    # contains a legacy `error_action` kwarg that is not accepted by some
-    # runtime combinations of pmdarima/statsmodels. Retry once after removing
-    # that legacy kwarg so prediction remains compatible across environments.
     try:
         sarimax_model.update(y, X=X_row, maxiter=0)
-    except Exception as first_error:
-        sarimax_model = _sanitize_sarimax_runtime_kwargs(sarimax_model)
+    except Exception:
         try:
             sarimax_model.update(y, X=X_row, maxiter=1)
         except Exception:
-            try:
-                sarimax_model.update(y, X=X_row)
-            except Exception:
-                # If the runtime still reports the legacy keyword problem,
-                # surface the original error rather than hiding a genuine
-                # model/data error.
-                if "error_action" in str(first_error).lower():
-                    raise first_error
-                raise
+            sarimax_model.update(y, X=X_row)
     return sarimax_model
 def _predict_xgb_residual_one_step(model, X_base_row, residual_history, feature_columns, residual_target, residual_feature_cols, target_lags):
     idx = X_base_row.index[0]
@@ -477,7 +501,7 @@ def predict_hybrid_from_latest_input(raw_history, input_raw_exog, artifacts, cfg
         missing = X_xgb_base.columns[X_xgb_base.isna().any()].tolist()
         raise ValueError(f"Fitur XGBoost dasar belum lengkap: {missing}")
     sarimax_model = copy.deepcopy(artifacts["final_sarimax"])
-    sarimax_model = _sanitize_sarimax_runtime_kwargs(sarimax_model)
+    sarimax_model = _sanitize_sarimax_legacy_kwargs(sarimax_model)
     model_library = artifacts.get("model_library_sarimax", cfg.get("model_library_sarimax", "pmdarima.ARIMA"))
     residual_history = pd.Series(artifacts["final_residual_train_log"]).copy()
     residual_history.index = pd.to_datetime(residual_history.index).to_period("M").to_timestamp("M")
@@ -583,7 +607,7 @@ def predict_hybrid_future(raw_history, future_raw_exog, artifacts, cfg):
     if X_xgb_base.isna().any().any():
         missing = X_xgb_base.columns[X_xgb_base.isna().any()].tolist()
         raise ValueError(f"Fitur XGBoost dasar belum lengkap: {missing}")
-    sarimax_model = _sanitize_sarimax_runtime_kwargs(artifacts["final_sarimax"])
+    sarimax_model = _sanitize_sarimax_legacy_kwargs(artifacts["final_sarimax"])
     horizon = len(future_months)
     model_library = artifacts.get("model_library_sarimax", cfg.get("model_library_sarimax", "pmdarima.ARIMA"))
     if hasattr(sarimax_model, "predict") and model_library == "pmdarima.ARIMA":
