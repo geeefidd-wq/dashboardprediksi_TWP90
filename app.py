@@ -340,38 +340,38 @@ def ensure_raw_history_has_required_exog(raw_history, differencing_orders):
 
 def safe_sarimax_predict(model, X_row, model_library="pmdarima.ARIMA"):
     """
-    Compatibility wrapper untuk artifact pmdarima/statsmodels.
-    Beberapa artifact lama membawa konfigurasi internal yang memicu
-    Unknown keyword arguments (misalnya error_action).
-    Wrapper ini hanya mengirim argumen prediksi yang valid.
+    Prediksi SARIMAX yang kompatibel dengan artifact pmdarima terbaru.
+    Artifact hybrid_twp90_model menggunakan pmdarima.ARIMA.
+    Error sebelumnya muncul karena sebagian object ARIMA membawa kwargs lama
+    (contoh error_action) yang tidak diterima oleh predict().
     """
-    X_row = X_row.astype(float)
+    X_row = np.asarray(X_row, dtype=float)
 
-    if model_library == "pmdarima.ARIMA" and hasattr(model, "predict"):
-        try:
-            return float(np.asarray(
-                model.predict(n_periods=1, X=X_row),
+    if model_library == "pmdarima.ARIMA" or model.__class__.__module__.startswith("pmdarima"):
+        return float(
+            np.asarray(
+                model.predict(
+                    n_periods=1,
+                    X=X_row
+                ),
                 dtype=float
-            ).reshape(-1)[0])
-        except TypeError as exc:
-            msg = str(exc)
-            if "Unknown keyword arguments" in msg or "error_action" in msg:
-                return float(np.asarray(
-                    model.predict(n_periods=1, X=np.asarray(X_row, dtype=float)),
-                    dtype=float
-                ).reshape(-1)[0])
-            raise
+            ).reshape(-1)[0]
+        )
 
     if hasattr(model, "forecast"):
-        return float(np.asarray(
-            model.forecast(steps=1, exog=X_row),
-            dtype=float
-        ).reshape(-1)[0])
+        return float(
+            np.asarray(
+                model.forecast(steps=1, exog=X_row),
+                dtype=float
+            ).reshape(-1)[0]
+        )
 
-    return float(np.asarray(
-        model.predict(n_periods=1, X=X_row),
-        dtype=float
-    ).reshape(-1)[0])
+    return float(
+        np.asarray(
+            model.predict(X_row),
+            dtype=float
+        ).reshape(-1)[0]
+    )
 
 def _predict_sarimax_one_step(sarimax_model, X_row, model_library):
     return safe_sarimax_predict(
@@ -584,12 +584,18 @@ def predict_hybrid_future(raw_history, future_raw_exog, artifacts, cfg):
     sarimax_model = artifacts["final_sarimax"]
     horizon = len(future_months)
     model_library = artifacts.get("model_library_sarimax", cfg.get("model_library_sarimax", "pmdarima.ARIMA"))
-    if hasattr(sarimax_model, "predict") and model_library == "pmdarima.ARIMA":
-        sarimax_pred = sarimax_model.predict(n_periods=horizon, X=X_sarimax)
+    if model_library == "pmdarima.ARIMA" or sarimax_model.__class__.__module__.startswith("pmdarima"):
+        sarimax_pred = sarimax_model.predict(
+            n_periods=horizon,
+            X=np.asarray(X_sarimax, dtype=float)
+        )
     elif hasattr(sarimax_model, "forecast"):
-        sarimax_pred = sarimax_model.forecast(steps=horizon, exog=X_sarimax)
+        sarimax_pred = sarimax_model.forecast(
+            steps=horizon,
+            exog=X_sarimax
+        )
     else:
-        sarimax_pred = sarimax_model.predict(n_periods=horizon, X=X_sarimax)
+        sarimax_pred = sarimax_model.predict(X_sarimax)
     sarimax_pred_log = pd.Series(np.asarray(sarimax_pred, dtype=float).reshape(-1), index=future_months, name="Prediksi_SARIMAX_Log")
     xgb_resid_log, X_xgb_final_used = predict_xgb_residual_recursive(
         artifacts["final_xgb"],
