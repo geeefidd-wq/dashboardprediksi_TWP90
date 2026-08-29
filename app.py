@@ -70,52 +70,11 @@ def _missing_file_message(path: str) -> str:
         f"File tidak ditemukan: {path}. Pastikan artifact tersedia di folder model_artifacts "
         "atau satu folder dengan app.py."
     )
-def sanitize_sarimax_artifact(model):
-    """
-    Hapus metadata fit pmdarima lama yang tidak lagi dikenali oleh
-    statsmodels saat forecasting/update. Parameter model yang sudah fit
-    tidak diubah; yang dibersihkan hanya metadata runtime.
-
-    Artifact yang dipakai memang menyimpan ``error_action='ignore'`` di
-    sarimax_kwargs dan juga di ``SARIMAX._init_keys``. Pada kombinasi
-    pmdarima/statsmodels tertentu metadata tersebut diteruskan ke
-    statsmodels dan memunculkan: Unknown keyword arguments: ['error_action'].
-    """
-    if model is None:
-        return model
-
-    try:
-        kwargs = getattr(model, "sarimax_kwargs", None)
-        if isinstance(kwargs, dict):
-            kwargs.pop("error_action", None)
-    except Exception:
-        pass
-
-    try:
-        arima_res = getattr(model, "arima_res_", None)
-        sarimax_model = getattr(arima_res, "model", None)
-        if sarimax_model is not None:
-            init_kwargs = getattr(sarimax_model, "_init_kwargs", None)
-            if isinstance(init_kwargs, dict):
-                init_kwargs.pop("error_action", None)
-
-            init_keys = getattr(sarimax_model, "_init_keys", None)
-            if isinstance(init_keys, (list, tuple)):
-                sarimax_model._init_keys = [k for k in init_keys if k != "error_action"]
-    except Exception:
-        pass
-
-    return model
-
-
 @st.cache_resource(show_spinner=False)
 def load_artifacts():
     if not os.path.exists(MODEL_PATH):
         raise FileNotFoundError(_missing_file_message(MODEL_PATH))
-    artifacts = joblib.load(MODEL_PATH)
-    if isinstance(artifacts, dict) and "final_sarimax" in artifacts:
-        artifacts["final_sarimax"] = sanitize_sarimax_artifact(artifacts["final_sarimax"])
-    return artifacts
+    return joblib.load(MODEL_PATH)
 @st.cache_data(show_spinner=False)
 def load_config():
     if not os.path.exists(CONFIG_PATH):
@@ -377,14 +336,7 @@ def ensure_raw_history_has_required_exog(raw_history, differencing_orders):
             "Kolom historis yang belum tersedia: " + ", ".join(missing_cols) + "."
         )
 def _predict_sarimax_one_step(sarimax_model, X_row, model_library):
-    # Pastikan artifact pmdarima lama tidak meneruskan error_action ke
-    # statsmodels. Ini penting pada statsmodels versi baru yang menolak
-    # keyword tersebut sebagai error, bukan sekadar warning.
-    sarimax_model = sanitize_sarimax_artifact(sarimax_model)
-
-    if model_library == "pmdarima.ARIMA":
-        # Tetap gunakan API pmdarima setelah metadata dibersihkan agar
-        # perilaku forecasting sama dengan artifact saat training.
+    if hasattr(sarimax_model, "predict") and model_library == "pmdarima.ARIMA":
         pred = sarimax_model.predict(n_periods=1, X=X_row)
     elif hasattr(sarimax_model, "forecast"):
         pred = sarimax_model.forecast(steps=1, exog=X_row)
@@ -487,7 +439,7 @@ def predict_hybrid_from_latest_input(raw_history, input_raw_exog, artifacts, cfg
     if X_xgb_base.isna().any().any():
         missing = X_xgb_base.columns[X_xgb_base.isna().any()].tolist()
         raise ValueError(f"Fitur XGBoost dasar belum lengkap: {missing}")
-    sarimax_model = sanitize_sarimax_artifact(copy.deepcopy(artifacts["final_sarimax"]))
+    sarimax_model = copy.deepcopy(artifacts["final_sarimax"])
     model_library = artifacts.get("model_library_sarimax", cfg.get("model_library_sarimax", "pmdarima.ARIMA"))
     residual_history = pd.Series(artifacts["final_residual_train_log"]).copy()
     residual_history.index = pd.to_datetime(residual_history.index).to_period("M").to_timestamp("M")
@@ -593,7 +545,7 @@ def predict_hybrid_future(raw_history, future_raw_exog, artifacts, cfg):
     if X_xgb_base.isna().any().any():
         missing = X_xgb_base.columns[X_xgb_base.isna().any()].tolist()
         raise ValueError(f"Fitur XGBoost dasar belum lengkap: {missing}")
-    sarimax_model = sanitize_sarimax_artifact(copy.deepcopy(artifacts["final_sarimax"]))
+    sarimax_model = artifacts["final_sarimax"]
     horizon = len(future_months)
     model_library = artifacts.get("model_library_sarimax", cfg.get("model_library_sarimax", "pmdarima.ARIMA"))
     if hasattr(sarimax_model, "predict") and model_library == "pmdarima.ARIMA":
