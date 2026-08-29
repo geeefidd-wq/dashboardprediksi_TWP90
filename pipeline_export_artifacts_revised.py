@@ -94,6 +94,35 @@ def month_end(value) -> pd.Timestamp:
     return pd.to_datetime(value).to_period("M").to_timestamp("M")
 
 
+def sanitize_sarimax_artifact(model):
+    """Bersihkan metadata pmdarima lama yang tidak kompatibel dengan statsmodels baru."""
+    if model is None:
+        return model
+
+    try:
+        kwargs = getattr(model, "sarimax_kwargs", None)
+        if isinstance(kwargs, dict):
+            kwargs.pop("error_action", None)
+    except Exception:
+        pass
+
+    try:
+        arima_res = getattr(model, "arima_res_", None)
+        sarimax_model = getattr(arima_res, "model", None)
+        if sarimax_model is not None:
+            init_kwargs = getattr(sarimax_model, "_init_kwargs", None)
+            if isinstance(init_kwargs, dict):
+                init_kwargs.pop("error_action", None)
+
+            init_keys = getattr(sarimax_model, "_init_keys", None)
+            if isinstance(init_keys, (list, tuple)):
+                sarimax_model._init_keys = [k for k in init_keys if k != "error_action"]
+    except Exception:
+        pass
+
+    return model
+
+
 def next_month(value: pd.Timestamp, step: int = 1) -> pd.Timestamp:
     return (month_end(value).to_period("M") + int(step)).to_timestamp("M")
 
@@ -172,6 +201,8 @@ def main() -> None:
 
     cfg = load_json(CONFIG_PATH)
     artifacts: dict[str, Any] = joblib.load(MODEL_PATH)
+    if "final_sarimax" in artifacts:
+        artifacts["final_sarimax"] = sanitize_sarimax_artifact(artifacts["final_sarimax"])
 
     target = cfg.get("target") or artifacts.get("target") or DEFAULT_TARGET
     date_col = cfg.get("date_col", DEFAULT_DATE_COL)
@@ -253,6 +284,8 @@ def main() -> None:
         json.dump(enriched_config, f, ensure_ascii=False, indent=2, default=json_default)
 
     enriched_artifacts = dict(artifacts)
+    if "final_sarimax" in enriched_artifacts:
+        enriched_artifacts["final_sarimax"] = sanitize_sarimax_artifact(enriched_artifacts["final_sarimax"])
     enriched_artifacts.update(
         {
             "forecast_horizon": forecast_horizon,
