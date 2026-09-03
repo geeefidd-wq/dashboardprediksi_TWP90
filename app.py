@@ -1374,7 +1374,7 @@ hr {border-color:#cce0ff;}
 st.markdown(
     f"""
 <div class="hero">
-  <div class="hero-title">Dashboard Prediksi TWP90<br>P2P lending di Indonesia</div>
+  <div class="hero-title">Dashboard Prediksi TWP90<br>P2P Lending di Indonesia</div>
   <div class="badge-row">
     <span class="badge">Data terakhir: {last_observed.strftime('%B %Y')}</span>
     <span class="badge">Prediksi mulai: {next_month.strftime('%B %Y')}</span>
